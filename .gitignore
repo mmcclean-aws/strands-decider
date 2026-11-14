@@ -4,7 +4,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 uv.lock
-!benchmark/uv.lock
 
 # Training artefacts
 checkpoints/
@@ -37,3 +36,6 @@ dist/
 
 # Local inference benchmark environments and generated runs
 /benchmark/environments/
+
+# Clones and other caches populated by scripts/ (e.g. preview_docs_site.sh)
+/.cache/
