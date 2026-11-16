@@ -1,3 +1,5 @@
+# Overview
+
 System One models understand natural language and make a decision based on
 that information. They do not generate text — they return a typed answer from a
 known output space along with calibrated confidence. Because the output space
@@ -72,8 +74,10 @@ strands-decider ask StrandsAgents/strands-decider-E2B-gemma4-v1-2610 \
 ## Image support
 
 Strands Decider can also answer questions about images when loaded with
-`--vision`. See [Images](images.md) for the request format and supported
-models.
+`--vision`. See [Getting started → Ask about an image](getting-started.md#ask-about-an-image)
+for the install step and an example, and
+[designs/images](designs/images.md) for the full request shape and vision
+benchmark results.
 
 ```bash
 pip install "strands-decider[vision]"

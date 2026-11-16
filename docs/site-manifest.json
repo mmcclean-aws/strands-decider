@@ -50,13 +50,6 @@
       }
     },
     {
-      "id": "images",
-      "source": "docs/images.md",
-      "slug": "images",
-      "title": "Images",
-      "description": "Ask Strands Decider questions about images with vision-capable models."
-    },
-    {
       "id": "design-inference",
       "source": "docs/designs/inference.md",
       "slug": "designs/inference",

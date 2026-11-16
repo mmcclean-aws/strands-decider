@@ -57,7 +57,7 @@ complete installation, device, command-line, and HTTP server guide.
 
 - [Inference](inference.md): install Decider, ask questions, and serve the HTTP
   API.
-- [Images](../images.md): ask questions about image inputs with supported models.
+- [Images](./images.md): ask questions about image inputs with supported models.
 - [Architecture](architecture.md): understand the pointer head, question types,
   calibration, and shared-prefix cache.
 - [Model names](naming.md): choose and interpret a published model identifier.

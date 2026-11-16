@@ -69,7 +69,7 @@ On the Decision Index (balanced skill) the soup scores 30.82, measured with the 
 | internal sets (`training/recipe.sh eval`) and the code tasks, on the L4 | the soup column above, each within 2 items of the harness |
 | README examples, `--device cpu` and `--device cuda` | the same answers; probabilities within 0.006 |
 | code: test suite (CPU), ruff and mypy, as CI runs them | pass |
-| images, `--vision` ([docs/images.md](../docs/images.md#v1)) | NaturalBench 0.776, POPE 0.872; hobson-v21 on the same GPU 0.785, 0.877 |
+| images, `--vision` ([docs/designs/images.md](../docs/designs/images.md#v1)) | NaturalBench 0.776, POPE 0.872; hobson-v21 on the same GPU 0.785, 0.877 |
 
 ## Gemma 4 v1
 
@@ -241,7 +241,7 @@ training harness, on other GPUs (NVIDIA L40S for text, L4 for images):
 | HotpotQA (never trained on) | 0.746 | 0.745 |
 | held-out short tasks (6,000) | 0.650 | 0.650 |
 | generated adequacy (302) | 0.788 | 0.788 |
-| images, `--vision` ([docs/images.md](../docs/images.md#v21)) | not run | NaturalBench 0.785, POPE 0.878 |
+| images, `--vision` ([docs/designs/images.md](../docs/designs/images.md#v21)) | not run | NaturalBench 0.785, POPE 0.878 |
 | code: test suite (CPU), ruff and mypy, as CI runs them | | pass |
 
 Every accuracy is within one item of its training-time figure. JevBench ECE, binned over

@@ -1,3 +1,5 @@
+# Strands Decider
+
 Strands Decider is a System One model developed by the Strands Agents team in
 partnership with AWS. It is a top-performing decision model that you can drop
 into your agentic applications today.

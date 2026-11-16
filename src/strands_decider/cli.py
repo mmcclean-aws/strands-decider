@@ -72,7 +72,7 @@ def serve_cmd(
     vision: bool = typer.Option(
         False,
         "--vision",
-        help="Keep Qwen3.5's vision tower so requests may carry `images` (docs/images.md).",
+        help="Keep Qwen3.5's vision tower so requests may carry `images` (docs/designs/images.md).",
     ),
     max_batch: int = typer.Option(
         32,

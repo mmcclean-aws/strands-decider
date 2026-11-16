@@ -1,3 +1,5 @@
+# Deployment
+
 There are a number of ways to host Strands Decider yourself.
 
 ## Hosting options

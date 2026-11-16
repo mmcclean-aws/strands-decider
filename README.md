@@ -189,8 +189,8 @@ v19 matches an image-trained 2B decider on accuracy, and on NaturalBench is much
 calibrated (ECE 0.014 against 0.080). v21 has v19's image accuracy, is better calibrated on
 POPE, and is more confident than v19 when the image is missing. v1 has v21's image accuracy;
 with the image missing it is more overconfident than v21 on POPE
-([docs/images.md](docs/images.md#v1)). See
-[docs/images.md](docs/images.md) for the request shape, how it works and the measurements.
+([docs/designs/images.md](docs/designs/images.md#v1)). See
+[docs/designs/images.md](docs/designs/images.md) for the request shape, how it works and the measurements.
 
 ### Deploying it
 

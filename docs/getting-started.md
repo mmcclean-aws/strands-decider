@@ -1,3 +1,5 @@
+# Getting started
+
 This walkthrough takes you from install to using Strands Decider as a model
 router inside a Strands agent.
 
@@ -49,6 +51,21 @@ curl -s localhost:8000/v1/systemone -H 'content-type: application/json' -d '{
 
 See [Decision models in the Strands SDK](https://strandsagents.com/docs/user-guide/sdk/decision-models/)
 for the model-routing agent walkthrough.
+
+## Ask about an image
+
+Install the vision extra and load a vision-capable model with `--vision`:
+
+```bash
+pip install "strands-decider[vision]"
+strands-decider ask StrandsAgents/strands-decider-2B-qwen3.5-v1-2610 \
+  --image screen.png \
+  --choice "status=paid,retry,cart,empty"
+```
+
+From the HTTP API, pass base64 images in the `images` field. See
+[designs/images](designs/images.md) for the request shape, limits, and the
+vision benchmark results.
 
 ## More examples
 
