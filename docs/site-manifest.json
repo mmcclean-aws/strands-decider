@@ -54,22 +54,7 @@
       "source": "docs/images.md",
       "slug": "images",
       "title": "Images",
-      "description": "Ask Strands Decider questions about images with vision-capable models.",
-      "nav": {
-        "group": "Using Decider",
-        "order": 2
-      }
-    },
-    {
-      "id": "design-overview",
-      "source": "docs/designs/overview.md",
-      "slug": "designs/overview",
-      "title": "Design overview",
-      "description": "Deeper overview of Strands Decider: question types, outputs, and when to use it.",
-      "nav": {
-        "group": "Design",
-        "order": 1
-      }
+      "description": "Ask Strands Decider questions about images with vision-capable models."
     },
     {
       "id": "design-inference",
@@ -79,7 +64,7 @@
       "description": "Install Strands Decider, ask typed questions, serve the HTTP API, and choose an inference device.",
       "nav": {
         "group": "Design",
-        "order": 2
+        "order": 1
       }
     },
     {
@@ -90,18 +75,7 @@
       "description": "Understand the pointer-head architecture, question types, training objective, and design decisions.",
       "nav": {
         "group": "Design",
-        "order": 3
-      }
-    },
-    {
-      "id": "design-naming",
-      "source": "docs/designs/naming.md",
-      "slug": "designs/model-names",
-      "title": "Model names",
-      "description": "Understand released model identifiers, version fields, and release tag conventions.",
-      "nav": {
-        "group": "Design",
-        "order": 4
+        "order": 2
       }
     }
   ]

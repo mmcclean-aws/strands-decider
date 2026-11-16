@@ -1,5 +1,3 @@
-# Strands Decider
-
 Strands Decider is a System One model developed by the Strands Agents team in
 partnership with AWS. It is a top-performing decision model that you can drop
 into your agentic applications today.
@@ -8,8 +6,8 @@ into your agentic applications today.
 
 | | |
 | --- | --- |
-| **[Overview of System One models](overview.md)** — understand what System One models are and the three question types they answer. | **[Using System One models in Strands SDK](getting-started.md)** — walk through using Strands Decider inside the Strands SDK. |
-| **[Deploying Strands Decider](deployment.md)** — pick a model, instance type, and host on AWS or another cloud. | **[Getting started with Strands Decider](getting-started.md)** — run it yourself in minutes. |
+| **[Overview of System One models](overview.md)** — understand what System One models are and the three question types they answer. | **[Getting started](getting-started.md)** — install, serve, and run your first decision in minutes. |
+| **[Deploying Strands Decider](deployment.md)** — pick a model, instance type, and host on AWS or another cloud. | **[Using System One models in Strands SDK](https://strandsagents.com/docs/user-guide/sdk/decision-models/)** — call Decider from a Strands agent. |
 
 ## Related blogs
 
