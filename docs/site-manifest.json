@@ -67,7 +67,7 @@
       "title": "Models",
       "description": "Compare every published v1 Strands Decider model and pick the right one.",
       "nav": {
-        "group": ["Using Decider", "Models"],
+        "group": "Models",
         "order": 3
       }
     },
@@ -78,7 +78,7 @@
       "title": "2B-qwen3.5",
       "description": "The Qwen3.5-2B-based v1 checkpoint, the only v1 model with image support.",
       "nav": {
-        "group": ["Using Decider", "Models"],
+        "group": "Models",
         "order": 4
       }
     },
@@ -89,7 +89,7 @@
       "title": "E2B-gemma4",
       "description": "The smallest Gemma 4 v1 checkpoint.",
       "nav": {
-        "group": ["Using Decider", "Models"],
+        "group": "Models",
         "order": 5
       }
     },
@@ -100,7 +100,7 @@
       "title": "E4B-gemma4",
       "description": "The mid-size Gemma 4 v1 checkpoint; best accuracy-per-GB.",
       "nav": {
-        "group": ["Using Decider", "Models"],
+        "group": "Models",
         "order": 6
       }
     },
@@ -111,7 +111,7 @@
       "title": "12B-gemma4",
       "description": "The dense Gemma 4 12B v1 checkpoint.",
       "nav": {
-        "group": ["Using Decider", "Models"],
+        "group": "Models",
         "order": 7
       }
     },
@@ -122,8 +122,30 @@
       "title": "26B-A4B-gemma4",
       "description": "The mixture-of-experts Gemma 4 v1 checkpoint; highest JevBench.",
       "nav": {
-        "group": ["Using Decider", "Models"],
+        "group": "Models",
         "order": 8
+      }
+    },
+    {
+      "id": "understanding",
+      "source": "docs/understanding.md",
+      "slug": "understanding",
+      "title": "Understanding Strands Decider",
+      "description": "The shape of Decider: three question types, the pointer head, calibration, and what the training recipe produces.",
+      "nav": {
+        "group": "Training",
+        "order": 1
+      }
+    },
+    {
+      "id": "training",
+      "source": "docs/training.md",
+      "slug": "training",
+      "title": "Train a model",
+      "description": "Reproduce the published v1 checkpoint from source, or point the recipe at your own data mix.",
+      "nav": {
+        "group": "Training",
+        "order": 2
       }
     }
   ]
