@@ -107,7 +107,7 @@ jobs:
     # with a warning.
     name: core tokenizer (gemma 4)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       GEMMA4_REPO: google/gemma-4-E2B-it
       GEMMA4_REVISION: 3e22461f65e89153144f8adb70e3b8c2cc9845a7
@@ -218,6 +218,20 @@ jobs:
             STRANDS_DECIDER_GEMMA4_TOKENIZER="$dir/tokenizer.json" \
               python -m pytest -q -rs tests/test_core_prompt.py tests/test_core_images.py
           done
+      # The training tests that need Gemma 4's tokenizer (the export end to end, the expert
+      # adapters' export, the strands-chat collator): the cpu job has no tokenizer and skips
+      # them. They need torch, installed only now, after the torch-free runs above.
+      - if: steps.fetch.outputs.available == 'true'
+        run: |
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[dev]"
+      - if: steps.fetch.outputs.available == 'true'
+        env:
+          HF_HUB_OFFLINE: "1"
+          STRANDS_DECIDER_GEMMA4_TOKENIZER: ${{ steps.fetch.outputs.dir }}/tokenizer.json
+        run: |
+          python -m pytest -q -rs training/tests/test_export_v2.py \
+            training/tests/test_expert_lora.py training/tests/test_strands_chat.py
 
   lint:
     name: lint
