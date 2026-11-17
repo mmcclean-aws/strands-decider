@@ -39,6 +39,17 @@
       }
     },
     {
+      "id": "inference",
+      "source": "docs/inference.md",
+      "slug": "inference",
+      "title": "Inference server",
+      "description": "Serve Strands Decider over HTTP: install, endpoints, devices, and request shapes.",
+      "nav": {
+        "group": "Using Decider",
+        "order": 1
+      }
+    },
+    {
       "id": "deployment",
       "source": "docs/deployment.md",
       "slug": "deployment",
@@ -46,7 +57,7 @@
       "description": "Choose a model, instance type, and host Strands Decider on AWS or another cloud.",
       "nav": {
         "group": "Using Decider",
-        "order": 1
+        "order": 2
       }
     },
     {
