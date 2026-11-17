@@ -67,8 +67,8 @@
       "title": "Models",
       "description": "Compare every published v1 Strands Decider model and pick the right one.",
       "nav": {
-        "group": "Models",
-        "order": 1
+        "group": ["Using Decider", "Models"],
+        "order": 3
       }
     },
     {
@@ -78,8 +78,8 @@
       "title": "2B-qwen3.5",
       "description": "The Qwen3.5-2B-based v1 checkpoint, the only v1 model with image support.",
       "nav": {
-        "group": "Models",
-        "order": 2
+        "group": ["Using Decider", "Models"],
+        "order": 4
       }
     },
     {
@@ -89,8 +89,8 @@
       "title": "E2B-gemma4",
       "description": "The smallest Gemma 4 v1 checkpoint.",
       "nav": {
-        "group": "Models",
-        "order": 3
+        "group": ["Using Decider", "Models"],
+        "order": 5
       }
     },
     {
@@ -100,8 +100,8 @@
       "title": "E4B-gemma4",
       "description": "The mid-size Gemma 4 v1 checkpoint; best accuracy-per-GB.",
       "nav": {
-        "group": "Models",
-        "order": 4
+        "group": ["Using Decider", "Models"],
+        "order": 6
       }
     },
     {
@@ -111,8 +111,8 @@
       "title": "12B-gemma4",
       "description": "The dense Gemma 4 12B v1 checkpoint.",
       "nav": {
-        "group": "Models",
-        "order": 5
+        "group": ["Using Decider", "Models"],
+        "order": 7
       }
     },
     {
@@ -122,30 +122,8 @@
       "title": "26B-A4B-gemma4",
       "description": "The mixture-of-experts Gemma 4 v1 checkpoint; highest JevBench.",
       "nav": {
-        "group": "Models",
-        "order": 6
-      }
-    },
-    {
-      "id": "design-inference",
-      "source": "docs/designs/inference.md",
-      "slug": "designs/inference",
-      "title": "Inference",
-      "description": "Install Strands Decider, ask typed questions, serve the HTTP API, and choose an inference device.",
-      "nav": {
-        "group": "Design",
-        "order": 1
-      }
-    },
-    {
-      "id": "design-architecture",
-      "source": "docs/designs/architecture.md",
-      "slug": "designs/architecture",
-      "title": "Architecture",
-      "description": "Understand the pointer-head architecture, question types, training objective, and design decisions.",
-      "nav": {
-        "group": "Design",
-        "order": 2
+        "group": ["Using Decider", "Models"],
+        "order": 8
       }
     }
   ]
