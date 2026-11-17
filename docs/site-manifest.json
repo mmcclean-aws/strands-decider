@@ -134,7 +134,7 @@
       "description": "The shape of Decider: three question types, the pointer head, calibration, and what the training recipe produces.",
       "nav": {
         "group": "Training",
-        "order": 1
+        "order": 9
       }
     },
     {
@@ -145,7 +145,7 @@
       "description": "Reproduce the published v1 checkpoint from source, or point the recipe at your own data mix.",
       "nav": {
         "group": "Training",
-        "order": 2
+        "order": 10
       }
     }
   ]
