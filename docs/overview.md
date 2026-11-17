@@ -39,58 +39,41 @@ Given a list of options, pick one.
 >
 > _Strands Decider:_ **Yellow**
 
-Try it yourself:
-
-```bash
-pip install strands-decider
-
-strands-decider ask StrandsAgents/strands-decider-E2B-gemma4-v1-2610 \
-  --state "What color is this fruit: Banana" \
-  --choice "color=red,yellow,blue"
-```
-
 ### Noul (yes / no)
 
 Ask a yes-or-no question. Decider returns the probability that the answer is
 true.
 
-```bash
-strands-decider ask StrandsAgents/strands-decider-E2B-gemma4-v1-2610 \
-  --state "Help! My payouts have been failing for 3 days." \
-  --noul "urgent=is this request urgent?"
-```
+> **Example**
+>
+> _State:_ "Help! My payouts have been failing for 3 days."
+>
+> _Question:_ Is this request urgent?
+>
+> _Strands Decider:_ **Yes** (0.94)
 
 ### Score
 
 Rate something on an ordered scale. Decider returns the expected score, the
 distribution across levels, and confidence.
 
-```bash
-strands-decider ask StrandsAgents/strands-decider-E2B-gemma4-v1-2610 \
-  --state "The checkout button is missing on mobile." \
-  --score "severity=low,medium,high,critical"
-```
+> **Example**
+>
+> _State:_ "The checkout button is missing on mobile."
+>
+> _Scale:_ low, medium, high, critical
+>
+> _Strands Decider:_ **critical**
+
+Ready to try these? See the [Quickstart](quickstart.md) for runnable commands.
 
 ## Image support
 
 Strands Decider can also answer questions about images when loaded with
-`--vision`. See [Getting started → Ask about an image](getting-started.md#ask-about-an-image)
+`--vision`. See [Quickstart → Ask about an image](quickstart.md#ask-about-an-image)
 for the install step and an example, and
 [designs/images](designs/images.md) for the full request shape and vision
 benchmark results.
-
-```bash
-pip install "strands-decider[vision]"
-strands-decider serve StrandsAgents/strands-decider-2B-qwen3.5-v1-2610 --vision --port 8000
-```
-
-Example — classify a screenshot:
-
-```bash
-strands-decider ask StrandsAgents/strands-decider-2B-qwen3.5-v1-2610 \
-  --image screen.png \
-  --choice "status=paid,retry,cart,empty"
-```
 
 ## Good use cases for System One models
 

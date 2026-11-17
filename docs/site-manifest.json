@@ -17,22 +17,22 @@
       }
     },
     {
-      "id": "overview",
-      "source": "docs/overview.md",
-      "slug": "overview",
-      "title": "Overview",
-      "description": "Understand System One models and the three question types Strands Decider supports.",
+      "id": "quickstart",
+      "source": "docs/quickstart.md",
+      "slug": "quickstart",
+      "title": "Quickstart",
+      "description": "Install Strands Decider, serve it, and use it as a model router inside a Strands agent.",
       "nav": {
         "group": "Get started",
         "order": 2
       }
     },
     {
-      "id": "getting-started",
-      "source": "docs/getting-started.md",
-      "slug": "getting-started",
-      "title": "Getting started",
-      "description": "Install Strands Decider, serve it, and use it as a model router inside a Strands agent.",
+      "id": "overview",
+      "source": "docs/overview.md",
+      "slug": "overview",
+      "title": "Overview",
+      "description": "Understand System One models and the three question types Strands Decider supports.",
       "nav": {
         "group": "Get started",
         "order": 3

@@ -1,4 +1,4 @@
-# Getting started
+# Quickstart
 
 This walkthrough takes you from install to using Strands Decider as a model
 router inside a Strands agent.
@@ -75,6 +75,14 @@ vision benchmark results.
 strands-decider ask StrandsAgents/strands-decider-E2B-gemma4-v1-2610 \
   --state "Order #4421 never arrived and the tracking link is broken." \
   --score "severity=low,medium,high,critical"
+```
+
+### Ask a yes-or-no (noul) question
+
+```bash
+strands-decider ask StrandsAgents/strands-decider-E2B-gemma4-v1-2610 \
+  --state "Help! My payouts have been failing for 3 days." \
+  --noul "urgent=is this request urgent?"
 ```
 
 ### Classify an incoming request (non-agentic)
