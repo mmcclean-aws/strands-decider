@@ -1,10 +1,10 @@
 # Strands Decider
 
-<p align="center">
+<div align="center">
 
 ![Strands Decider](assets/strands-decider-logo.png)
 
-</p>
+</div>
 
 <div style="border: 1px solid var(--sl-color-gray-5); padding: 1rem 1.25rem; border-radius: 8px; font-weight: 600;">
 
