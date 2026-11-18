@@ -106,7 +106,7 @@ strands-decider ask StrandsAgents/strands-decider-2B-qwen3.5-v1-2610 \
 
 Run against this empty-cart screenshot:
 
-![Empty cart screenshot](/decider-assets/screen.png)
+![Empty cart screenshot](assets/screen.png)
 
 ```
 choice_0 -> empty (confidence 0.887)

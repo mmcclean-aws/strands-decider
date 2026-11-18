@@ -1,7 +1,9 @@
 # Strands Decider
 
 <p align="center">
-  <img src="/decider-assets/strands-decider-logo.png" alt="Strands Decider" width="140" />
+
+![Strands Decider](assets/strands-decider-logo.png)
+
 </p>
 
 <div style="border: 1px solid var(--sl-color-gray-5); padding: 1rem 1.25rem; border-radius: 8px; font-weight: 600;">
