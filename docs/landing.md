@@ -1,8 +1,16 @@
 # Strands Decider
 
+<p align="center">
+  <img src="/decider-assets/strands-decider-logo.png" alt="Strands Decider" width="140" />
+</p>
+
+<div style="border: 1px solid var(--sl-color-gray-5); padding: 1rem 1.25rem; border-radius: 8px; font-weight: 600;">
+
 Strands Decider is a System One model developed by the Strands Agents team in
 partnership with AWS. It is a top-performing decision model that you can drop
 into your agentic applications today.
+
+</div>
 
 ## Start here
 
@@ -19,9 +27,25 @@ into your agentic applications today.
 
 ## Strands Decider podcast
 
-| | |
-| --- | --- |
-| [![Episode 1](https://img.youtube.com/vi/j6zR0sPeMko/hqdefault.jpg)](https://www.youtube.com/watch?v=j6zR0sPeMko) | [![Episode 2](https://img.youtube.com/vi/i3YrL5LYpwk/hqdefault.jpg)](https://www.youtube.com/watch?v=i3YrL5LYpwk) |
-| [Episode 1](https://www.youtube.com/watch?v=j6zR0sPeMko) | [Episode 2](https://www.youtube.com/watch?v=i3YrL5LYpwk) |
-| [![Episode 3](https://img.youtube.com/vi/NVvjqd9iEl0/hqdefault.jpg)](https://www.youtube.com/watch?v=NVvjqd9iEl0) | [![Episode 4](https://img.youtube.com/vi/szKqAMSijvQ/hqdefault.jpg)](https://www.youtube.com/watch?v=szKqAMSijvQ) |
-| [Episode 3](https://www.youtube.com/watch?v=NVvjqd9iEl0) | [Episode 4](https://www.youtube.com/watch?v=szKqAMSijvQ) |
+<YouTube id="j6zR0sPeMko" title="Episode 1" />
+
+<details>
+<summary>Episode 2</summary>
+
+<YouTube id="i3YrL5LYpwk" title="Episode 2" />
+
+</details>
+
+<details>
+<summary>Episode 3</summary>
+
+<YouTube id="NVvjqd9iEl0" title="Episode 3" />
+
+</details>
+
+<details>
+<summary>Episode 4</summary>
+
+<YouTube id="szKqAMSijvQ" title="Episode 4" />
+
+</details>

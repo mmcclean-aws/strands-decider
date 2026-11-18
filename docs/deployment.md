@@ -1,45 +1,16 @@
 # Deployment
 
-There are a number of ways to host Strands Decider yourself.
+There are a number of ways to host Strands Decider yourself. Pick the target
+that matches how you want to pay for compute and how much cold-start latency
+you can tolerate.
 
 ## Hosting options
 
-### SageMaker JumpStart
-
-Host Strands Decider behind a SageMaker model endpoint.
-
-- **Pros:** dedicated host and auto-scaling.
-- **Cons:** pay for compute.
-
-| Instance type | Cost / hr | Single-question latency | Max concurrency |
-| --- | --- | --- | --- |
-| Basic CPU | _TBD_ | _TBD_ | _TBD_ |
-| Trainium | _TBD_ | _TBD_ | _TBD_ |
-| GPU | _TBD_ | _TBD_ | _TBD_ |
-
-_Cost, latency, and concurrency numbers coming soon from benchmarks._
-
-### Lambda
-
-Deploy a Lambda function that responds with the model response.
-
-- **Pros:** pay per request.
-- **Cons:** slow cold start, quantized models.
-
-### Lambda managed instances
-
-Deploy to a GPU Lambda function.
-
-- **Pros:** pay per request (you pay for instances).
-- **Cons:** cold start when scaled to zero (where supported).
-
-## Also supported
-
-- **EKS** — deploy alongside your existing cluster.
-- **GCP** — deploy to Google Cloud.
-- **Azure** — deploy to Azure.
-
-_How-to guides for these targets coming soon._
+- **[SageMaker JumpStart](deployment/sagemaker.md)** — dedicated host and auto-scaling. Pay for compute.
+- **[Lambda](deployment/lambda.md)** — pay per request. Slow cold start, quantized models.
+- **[EKS](deployment/eks.md)** — deploy alongside your existing cluster.
+- **[GCP](deployment/gcp.md)** — deploy to Google Cloud.
+- **[Azure](deployment/azure.md)** — deploy to Azure.
 
 ## Choosing a model version
 

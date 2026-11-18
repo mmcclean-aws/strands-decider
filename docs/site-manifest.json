@@ -56,8 +56,63 @@
       "title": "Deployment",
       "description": "Choose a model, instance type, and host Strands Decider on AWS or another cloud.",
       "nav": {
-        "group": "Using Decider",
+        "group": ["Using Decider", "Deployment"],
         "order": 2
+      }
+    },
+    {
+      "id": "deployment-sagemaker",
+      "source": "docs/deployment/sagemaker.md",
+      "slug": "deployment/sagemaker",
+      "title": "SageMaker JumpStart",
+      "description": "Host Strands Decider behind a SageMaker model endpoint.",
+      "nav": {
+        "group": ["Using Decider", "Deployment"],
+        "order": 3
+      }
+    },
+    {
+      "id": "deployment-lambda",
+      "source": "docs/deployment/lambda.md",
+      "slug": "deployment/lambda",
+      "title": "Lambda",
+      "description": "Deploy Strands Decider behind an AWS Lambda function.",
+      "nav": {
+        "group": ["Using Decider", "Deployment"],
+        "order": 4
+      }
+    },
+    {
+      "id": "deployment-eks",
+      "source": "docs/deployment/eks.md",
+      "slug": "deployment/eks",
+      "title": "EKS",
+      "description": "Deploy Strands Decider on an EKS cluster.",
+      "nav": {
+        "group": ["Using Decider", "Deployment"],
+        "order": 5
+      }
+    },
+    {
+      "id": "deployment-gcp",
+      "source": "docs/deployment/gcp.md",
+      "slug": "deployment/gcp",
+      "title": "GCP",
+      "description": "Deploy Strands Decider on Google Cloud.",
+      "nav": {
+        "group": ["Using Decider", "Deployment"],
+        "order": 6
+      }
+    },
+    {
+      "id": "deployment-azure",
+      "source": "docs/deployment/azure.md",
+      "slug": "deployment/azure",
+      "title": "Azure",
+      "description": "Deploy Strands Decider on Azure.",
+      "nav": {
+        "group": ["Using Decider", "Deployment"],
+        "order": 7
       }
     },
     {
@@ -67,7 +122,7 @@
       "title": "Models",
       "description": "Compare every published v1 Strands Decider model and pick the right one.",
       "nav": {
-        "group": "Models",
+        "group": ["Models", "V1 Models"],
         "order": 3
       }
     },
@@ -78,7 +133,7 @@
       "title": "2B-qwen3.5",
       "description": "The Qwen3.5-2B-based v1 checkpoint, the only v1 model with image support.",
       "nav": {
-        "group": "Models",
+        "group": ["Models", "V1 Models"],
         "order": 4
       }
     },
@@ -89,7 +144,7 @@
       "title": "E2B-gemma4",
       "description": "The smallest Gemma 4 v1 checkpoint.",
       "nav": {
-        "group": "Models",
+        "group": ["Models", "V1 Models"],
         "order": 5
       }
     },
@@ -100,7 +155,7 @@
       "title": "E4B-gemma4",
       "description": "The mid-size Gemma 4 v1 checkpoint; best accuracy-per-GB.",
       "nav": {
-        "group": "Models",
+        "group": ["Models", "V1 Models"],
         "order": 6
       }
     },
@@ -111,7 +166,7 @@
       "title": "12B-gemma4",
       "description": "The dense Gemma 4 12B v1 checkpoint.",
       "nav": {
-        "group": "Models",
+        "group": ["Models", "V1 Models"],
         "order": 7
       }
     },
@@ -122,7 +177,7 @@
       "title": "26B-A4B-gemma4",
       "description": "The mixture-of-experts Gemma 4 v1 checkpoint; highest JevBench.",
       "nav": {
-        "group": "Models",
+        "group": ["Models", "V1 Models"],
         "order": 8
       }
     },

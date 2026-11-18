@@ -8,6 +8,8 @@
     </a>
   </div>
 
+  <img src="docs/assets/strands-decider-logo.png" alt="Strands Decider" width="140" style="image-rendering: pixelated">
+
   <h1>Strands Decider</h1>
 
   <h2>A small, fast decision model for agentic AI.</h2>
