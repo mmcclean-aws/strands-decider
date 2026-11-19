@@ -408,7 +408,11 @@ The model is compiled ahead of time, one graph per input shape, so the engine pa
 to a bucket: whole prompts to 256 ... 4,096 tokens, at a few batch sizes for the short ones; a
 shared state to the same buckets; question suffixes to 128 tokens (`neuron_engine.NeuronConfig`).
 The LoRA adapter is merged into the bf16 weights at load, and the readout runs on the device
-([`neuron_model.py`](../src/strands_decider/neuron_model.py)). As on other devices, one question
+([`neuron_model.py`](../src/strands_decider/neuron_model.py)). The Gated DeltaNet layers run
+NKI kernels of their own ([`neuron_kernels/`](../src/strands_decider/neuron_kernels)): the chunk
+rule in WY form, and one kernel for the convolution, SiLU, L2 norm and gates before it; the
+attention layers run nkilib's `attention_cte`; GEMM weights are pre-transposed at load.
+`NeuronConfig(fast_kernels=False)` runs nkilib's Gated DeltaNet kernel and torch for the rest. As on other devices, one question
 forwards the whole prompt and several share the state's caches; a state over 4,096 tokens or a
 question over 128 tokens takes whole prompts. `serve` compiles every shape before it accepts
 requests. The Neuron SDK caches the compiled graphs on disk (`NEURON_LIBTORCH_CACHE_ROOT`): with

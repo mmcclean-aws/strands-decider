@@ -9,8 +9,11 @@ fp32 on the CPU; the device runs bf16.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 import torch
+import torch.nn.functional as F
 
 pytestmark = pytest.mark.neuron
 
@@ -83,9 +86,10 @@ def checkpoint(tmp_path_factory):
     return str(path)
 
 
-@pytest.fixture(scope="module")
-def engines(checkpoint):
-    device = load_neuron_engine(checkpoint, EngineConfig(), SHAPES)
+@pytest.fixture(scope="module", params=[False, True], ids=["nkilib", "fast"])
+def engines(checkpoint, request):
+    shapes = dataclasses.replace(SHAPES, fast_kernels=request.param)
+    device = load_neuron_engine(checkpoint, EngineConfig(), shapes)
     decider = StrandsDeciderModel.load(checkpoint)
     config, tok = decider.config, decider.tokenizer
     shape, sd = from_decider_model(decider, dtype=torch.float32)
@@ -117,3 +121,91 @@ def test_the_device_answers_as_the_eager_model_does(engines, questions):
 def test_every_shape_compiles_and_runs(engines):
     device, _ = engines
     device.warm_up()
+
+
+# ---- the kernels alone, against the torch references (fp32 on the CPU)
+
+DEV = torch.device("neuron", 0)
+
+
+def _compile(fn):
+    from libtorch_neuronx_lite.compile.native_backend import register
+
+    return torch.compile(fn, backend=register(), fullgraph=True, dynamic=False)
+
+
+def _rel(a, b):
+    a, b = a.detach().cpu().float(), b.detach().cpu().float()
+    return float((a - b).norm() / b.norm().clamp_min(1e-30))
+
+
+def _gdn_inputs(B, T, H=16, D=128, seed=0):
+    g = torch.Generator().manual_seed(seed)
+    q = F.normalize(torch.randn(B, H, T, D, generator=g), dim=-1)
+    k = F.normalize(torch.randn(B, H, T, D, generator=g), dim=-1)
+    v = torch.randn(B, H, T, D, generator=g) * 0.5
+    gate = -0.5 * torch.rand(B, H, T, generator=g)
+    beta = torch.sigmoid(torch.randn(B, H, T, generator=g) * 2)
+    return q, k, v, gate, beta
+
+
+@pytest.mark.parametrize("state", [False, True], ids=["zero-state", "initial-state"])
+@pytest.mark.parametrize(("B", "T"), [(1, 128), (2, 512), (1, 2048)])
+def test_gdn_fast_matches_the_reference(B, T, state):
+    from strands_decider.neuron_kernels import FastGdn
+    from strands_decider.neuron_model import gdn_chunk_ref
+
+    q, k, v, g, beta = _gdn_inputs(B, T, seed=B * 7 + T)
+    S0 = torch.randn(B, 16, 128, 128) * 0.05 if state else None
+    core = FastGdn(DEV)
+    fn = _compile(lambda *a: core(*a, return_state=True))
+    args = [x.to(torch.bfloat16).to(DEV) for x in (q, k, v)] + [g.to(DEV), beta.to(DEV)]
+    if state:
+        args.append(S0.to(DEV))
+    with torch.inference_mode():
+        out, final = fn(*args)
+    qq, kk, vv = (x.to(torch.bfloat16).float() for x in (q, k, v))
+    ref, ref_final = gdn_chunk_ref(qq, kk, vv, g, beta, S0=S0, return_state=True)
+    assert _rel(out, ref) <= 1e-2 and _rel(final, ref_final) <= 1e-2
+
+
+@pytest.mark.parametrize("T", [128, 1024])
+def test_the_fused_prologue_and_norms_match_their_references(T):
+    from strands_decider.neuron_kernels import fused_ops, layouts
+    from strands_decider.neuron_model import gated_rms_norm, rms_norm
+
+    B, g = 2, torch.Generator().manual_seed(1)
+    bf = torch.bfloat16
+    proj_hm = (torch.randn(B, 48, T, 128, generator=g) * 0.7).to(bf)
+    conv_w = (torch.randn(48, 128, 4, generator=g) * 0.4).to(bf)
+    zba = (torch.randn(B, T, 2080, generator=g) * 1.5).to(bf)
+    A, dtb = -(torch.rand(16, generator=g) * 4 + 0.1), torch.randn(16, generator=g) * 0.5
+    hist = (torch.randn(1, 48, 3, 128, generator=g) * 0.7).to(bf)
+    ref = layouts.gdn_prologue_ref(proj_hm, conv_w, zba[..., 2048:], A, dtb, conv_hist=hist)
+    fn = _compile(lambda p, w, z, ab, h: fused_ops.gdn_prologue(p, w, z, ab, conv_hist=h))
+    with torch.inference_mode():
+        out = fn(
+            proj_hm.permute(0, 1, 3, 2).contiguous().to(DEV),
+            layouts.conv_diag_from_conv_w(conv_w).to(DEV),
+            zba.to(DEV),
+            torch.stack([A, dtb], 1).contiguous().to(DEV),
+            hist.to(DEV),
+        )
+    for name, got, want in zip(["q", "k", "v", "g", "beta"], out, ref, strict=True):
+        assert _rel(got, want) <= 5e-3, name
+
+    x = (torch.randn(B, T, 2048, generator=g) * 0.5).to(bf)
+    ln = 1 + 0.1 * torch.randn(2048, generator=g)
+    with torch.inference_mode():
+        got = _compile(fused_ops.rms_norm_nki)(x.to(DEV), ln.to(DEV))
+    assert _rel(got, rms_norm(x.float(), ln, 1e-6)) <= 5e-3
+
+    o = (torch.randn(B, 16, T, 128, generator=g) * 0.3).to(bf)
+    gn = (1 + 0.1 * torch.randn(128, generator=g)).to(bf)
+    z = zba[..., :2048].reshape(B, T, 16, 128).transpose(1, 2)
+    want = (
+        gated_rms_norm(o.float(), z.float(), gn.float(), 1e-6).transpose(1, 2).reshape(B, T, 2048)
+    )
+    with torch.inference_mode():
+        got = _compile(fused_ops.gated_rms_norm_nki)(o.to(DEV), zba.to(DEV), gn.to(DEV))
+    assert _rel(got, want) <= 5e-3

@@ -1,11 +1,16 @@
 """NKI kernels for the decider's token mixers on AWS Trainium (`--device neuron`).
 
-These bind kernels from nkilib, which ships in the Neuron Deep Learning Container image, for
-`NeuronDeciderModel`'s two pluggable mixers:
+`NeuronDeciderModel`'s two pluggable token mixers:
 
   NkiMixers.gdn   the Gated DeltaNet chunk rule: nkilib.experimental.gdn.gdn_cte (schur form)
   NkiMixers.attn  causal grouped-query attention: nkilib.core.attention.attention_cte, which
                   takes head_dim 256 and a cached prefix's K and V directly
+  FastGdn         the Gated DeltaNet chunk rule in WY form (gdn_fast.py), 2.4x gdn_cte
+
+nkilib ships in the Neuron Deep Learning Container image. With `fast`, the model also runs the
+rest of each layer through fused_ops.py: the Gated DeltaNet prologue (convolution, SiLU, L2
+norm, beta and g in one kernel) and epilogue (the gated norm), NKI RMSNorms, and GEMM weights
+pre-transposed once at load (layouts.py).
 
 Both are called from inside a `torch.compile(backend="neuron_native_lite")` graph through
 libtorch_neuronx_lite's `wrap_nki`, on the LNC=2 grid (two physical NeuronCores per logical
@@ -109,3 +114,40 @@ class NkiMixers:
             **kw,
         )
         return o.reshape(B, Hq, T, D)
+
+
+class FastGdn:
+    """gdn_fast.py's kernel with `NkiMixers.gdn`'s contract. `compute_dtype` is its matmul
+    operand dtype: bf16, or fp16 at the same speed with about 8x less rounding error."""
+
+    def __init__(self, device: torch.device, compute_dtype: torch.dtype = torch.bfloat16) -> None:
+        from .gdn_fast import gdn_fast_consts
+
+        self.consts = gdn_fast_consts(device)
+        self.compute_dtype = compute_dtype
+
+    def __call__(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        g: torch.Tensor,
+        beta: torch.Tensor,
+        S0: torch.Tensor | None = None,
+        return_state: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        from .gdn_fast import gdn_fast
+
+        out: torch.Tensor | tuple[torch.Tensor, torch.Tensor] = gdn_fast(
+            q,
+            k,
+            v,
+            g,
+            beta,
+            self.consts,
+            initial_state=S0,
+            return_state=return_state,
+            compute_dtype=self.compute_dtype,
+            out_dtype=torch.bfloat16,
+        )
+        return out

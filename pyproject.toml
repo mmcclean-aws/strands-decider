@@ -158,6 +158,17 @@ module = [
 ]
 ignore_missing_imports = true
 
+# The NKI kernels (--device neuron) are written against nki's tracing API, which has no types;
+# their torch wrappers are typed. The torch-side layouts (neuron_kernels/layouts.py) are not exempt.
+[[tool.mypy.overrides]]
+module = [
+    "strands_decider.neuron_kernels.gdn_fast",
+    "strands_decider.neuron_kernels.fused_ops",
+]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests", "training/tests"]
 # "." so `import training.*` resolves; test_hf_export imports multistep_eval; "tests" and

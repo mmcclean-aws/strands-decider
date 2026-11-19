@@ -7,7 +7,7 @@ Math (chunk C=128, per lane = (batch, head); g = per-token log decay, G = within
     delta   = u - w S                                        per chunk, S = state entering the chunk
     out     = (scale e^G q) S + W delta,  W[r,s] = scale exp(G_r-G_s) q_r.k_s (s <= r)
     S_next  = e^{G_last} S + (e^{G_last - G} k)^T delta
-Same semantics as decider_model.gdn_chunk_ref / HF torch_chunk_gated_delta_rule (incl. optional S0).
+Same semantics as neuron_model.gdn_chunk_ref / HF torch_chunk_gated_delta_rule (incl. optional S0).
 
 Design (vs nkilib gdn_cte schur; see the timing/profile notes in test_gdn_fast.py):
   * WY form: the Schur-complement inverse is applied to [beta v | beta e^G k] once per chunk OFF the
@@ -42,11 +42,10 @@ from __future__ import annotations
 
 import functools
 
-import numpy as np
-
 import nki
 import nki.isa as nisa
 import nki.language as nl
+import numpy as np
 
 C = 128  # chunk length == partition count
 D = 128  # head dim (Dk == Dv == 128)
@@ -77,8 +76,20 @@ def build_consts() -> np.ndarray:
 
 
 @nki.jit
-def gdn_fast_kernel(q, k, v, g, beta, consts, s0=None, qt_in=None, kt_in=None, scale=1.0, out_dtype=None,
-                    jobs_per_batch=4):
+def gdn_fast_kernel(
+    q,
+    k,
+    v,
+    g,
+    beta,
+    consts,
+    s0=None,
+    qt_in=None,
+    kt_in=None,
+    scale=1.0,
+    out_dtype=None,
+    jobs_per_batch=4,
+):
     B, H, T, Dk = k.shape
     Dv = v.shape[-1]
     assert Dk == D and Dv == D and T % C == 0
@@ -114,7 +125,9 @@ def gdn_fast_kernel(q, k, v, g, beta, consts, s0=None, qt_in=None, kt_in=None, s
     mask_c = nl.ndarray((C, C), dtype=cdt, buffer=nl.sbuf)
     nisa.tensor_copy(dst=mask_c, src=cst[:, I_MASK_INCL, :], engine=nisa.engine.vector)
     negoff = nl.ndarray((C, N_LEVELS, C), dtype=cdt, buffer=nl.sbuf)
-    nisa.tensor_copy(dst=negoff, src=cst[:, I_NEGOFFT:I_NEGOFFT + N_LEVELS, :], engine=nisa.engine.vector)
+    nisa.tensor_copy(
+        dst=negoff, src=cst[:, I_NEGOFFT : I_NEGOFFT + N_LEVELS, :], engine=nisa.engine.vector
+    )
     ln_scale = float(np.log(scale))
 
     # lane groups of U (last may be partial)
@@ -135,44 +148,60 @@ def gdn_fast_kernel(q, k, v, g, beta, consts, s0=None, qt_in=None, kt_in=None, s
     # column-form per-token quantities: colq[t, quantity, row]
     NQ = 7  # 0: G (row form only), 1: beta, 2: e^{GL-G}, 3: beta e^G, 4: unused, 5: G + ln(beta), 6: G + ln(scale)
     colq = nl.ndarray((C, NQ, n_rb * C), dtype=nl.float32, buffer=nl.sbuf)
-    glb = nl.ndarray((C, n_rb * C), dtype=nl.float32, buffer=nl.sbuf)  # e^{G_last} broadcast to all partitions
+    glb = nl.ndarray(
+        (C, n_rb * C), dtype=nl.float32, buffer=nl.sbuf
+    )  # e^{G_last} broadcast to all partitions
     for rb in range(n_rb):
         r0 = rb * C
         nr = min(C, rows_total - r0)
         grow = nl.ndarray((C, C), dtype=nl.float32, buffer=nl.sbuf)
         brow = nl.ndarray((C, C), dtype=nl.float32, buffer=nl.sbuf)
-        nisa.dma_copy(dst=grow[0:nr, :], src=g_rows[l_start * n + r0:l_start * n + r0 + nr, :])
-        nisa.dma_copy(dst=brow[0:nr, :], src=b_rows[l_start * n + r0:l_start * n + r0 + nr, :])
+        nisa.dma_copy(dst=grow[0:nr, :], src=g_rows[l_start * n + r0 : l_start * n + r0 + nr, :])
+        nisa.dma_copy(dst=brow[0:nr, :], src=b_rows[l_start * n + r0 : l_start * n + r0 + nr, :])
         qrow = nl.ndarray((C, NQ, C), dtype=nl.float32, buffer=nl.sbuf)
         Gr = qrow[0:nr, 0, :]
-        nisa.tensor_scalar_cumulative(dst=Gr, src=grow[0:nr, :], op0=nl.multiply, imm0=1.0, op1=nl.add)
+        nisa.tensor_scalar_cumulative(
+            dst=Gr, src=grow[0:nr, :], op0=nl.multiply, imm0=1.0, op1=nl.add
+        )
         nisa.tensor_copy(dst=qrow[0:nr, 1, :], src=brow[0:nr, :], engine=nisa.engine.vector)
         # e^{GL - G}
-        nisa.activation(dst=qrow[0:nr, 2, :], op=nl.exp, data=Gr, bias=qrow[0:nr, 0, C - 1:C], scale=-1.0)
+        nisa.activation(
+            dst=qrow[0:nr, 2, :], op=nl.exp, data=Gr, bias=qrow[0:nr, 0, C - 1 : C], scale=-1.0
+        )
         eG = nl.ndarray((C, C), dtype=nl.float32, buffer=nl.sbuf)
         nisa.activation(dst=eG[0:nr, :], op=nl.exp, data=Gr)
-        nisa.tensor_tensor(dst=qrow[0:nr, 3, :], data1=eG[0:nr, :], data2=brow[0:nr, :], op=nl.multiply)
+        nisa.tensor_tensor(
+            dst=qrow[0:nr, 3, :], data1=eG[0:nr, :], data2=brow[0:nr, :], op=nl.multiply
+        )
         lnb = nl.ndarray((C, C), dtype=nl.float32, buffer=nl.sbuf)
         nisa.activation(dst=lnb[0:nr, :], op=nl.log, data=brow[0:nr, :])
         nisa.tensor_tensor(dst=qrow[0:nr, 5, :], data1=Gr, data2=lnb[0:nr, :], op=nl.add)
-        nisa.tensor_scalar(dst=qrow[0:nr, 6, :], data=Gr, op0=nl.add, operand0=ln_scale, engine=nisa.engine.vector)
+        nisa.tensor_scalar(
+            dst=qrow[0:nr, 6, :], data=Gr, op0=nl.add, operand0=ln_scale, engine=nisa.engine.vector
+        )
         gsp = nl.ndarray((C, 3, C), dtype=nl.bfloat16, buffer=nl.sbuf)
         gres = nl.ndarray((C, 2, C), dtype=nl.float32, buffer=nl.sbuf)
         nisa.tensor_copy(dst=gsp[0:nr, 0, :], src=Gr, engine=nisa.engine.vector)
         nisa.tensor_tensor(dst=gres[0:nr, 0, :], data1=Gr, data2=gsp[0:nr, 0, :], op=nl.subtract)
         nisa.tensor_copy(dst=gsp[0:nr, 1, :], src=gres[0:nr, 0, :], engine=nisa.engine.vector)
-        nisa.tensor_tensor(dst=gres[0:nr, 1, :], data1=gres[0:nr, 0, :], data2=gsp[0:nr, 1, :], op=nl.subtract)
+        nisa.tensor_tensor(
+            dst=gres[0:nr, 1, :], data1=gres[0:nr, 0, :], data2=gsp[0:nr, 1, :], op=nl.subtract
+        )
         nisa.tensor_copy(dst=gsp[0:nr, 2, :], src=gres[0:nr, 1, :], engine=nisa.engine.vector)
         for part in range(3):
-            nisa.dma_copy(dst=g_scr[part, r0:r0 + nr, :], src=gsp[0:nr, part, :])
+            nisa.dma_copy(dst=g_scr[part, r0 : r0 + nr, :], src=gsp[0:nr, part, :])
         for qi in (1, 2, 3, 5, 6):
             tp = nl.ndarray((C, C), dtype=nl.float32, buffer=nl.psum)
             nisa.nc_transpose(dst=tp[:, 0:nr], data=qrow[0:nr, qi, :], engine=nisa.engine.tensor)
-            nisa.tensor_copy(dst=colq[:, qi, r0:r0 + nr], src=tp[:, 0:nr], engine=nisa.engine.vector)
+            nisa.tensor_copy(
+                dst=colq[:, qi, r0 : r0 + nr], src=tp[:, 0:nr], engine=nisa.engine.vector
+            )
         # e^{G_last} per row broadcast over partitions: transpose of a column broadcast
         tpb = nl.ndarray((C, C), dtype=nl.float32, buffer=nl.psum)
-        nisa.nc_transpose(dst=tpb[:, 0:nr], data=eG[0:nr, C - 1:C].broadcast(1, C), engine=nisa.engine.tensor)
-        nisa.tensor_copy(dst=glb[:, r0:r0 + nr], src=tpb[:, 0:nr], engine=nisa.engine.vector)
+        nisa.nc_transpose(
+            dst=tpb[:, 0:nr], data=eG[0:nr, C - 1 : C].broadcast(1, C), engine=nisa.engine.tensor
+        )
+        nisa.tensor_copy(dst=glb[:, r0 : r0 + nr], src=tpb[:, 0:nr], engine=nisa.engine.vector)
 
     def row(li_, c_):
         return li_ * n + c_
@@ -180,12 +209,14 @@ def gdn_fast_kernel(q, k, v, g, beta, consts, s0=None, qt_in=None, kt_in=None, s
     # ---------------- state init
     S32 = []
     Sb = []
-    for (g0, gn) in groups:
+    for g0, gn in groups:
         s32 = nl.ndarray((D, U, D), dtype=nl.float32, buffer=nl.sbuf)
         sb = nl.ndarray((D, U, D), dtype=cdt, buffer=nl.sbuf)
         if s0 is not None:
-            nisa.dma_copy(dst=s32[:, 0:gn, :],
-                          src=s0_f.ap(pattern=[[D, D], [D * D, gn], [1, D]], offset=(l_start + g0) * D * D))
+            nisa.dma_copy(
+                dst=s32[:, 0:gn, :],
+                src=s0_f.ap(pattern=[[D, D], [D * D, gn], [1, D]], offset=(l_start + g0) * D * D),
+            )
             nisa.tensor_copy(dst=sb[:, 0:gn, :], src=s32[:, 0:gn, :], engine=nisa.engine.scalar)
         else:
             nisa.memset(dst=s32, value=0.0)
@@ -217,14 +248,18 @@ def gdn_fast_kernel(q, k, v, g, beta, consts, s0=None, qt_in=None, kt_in=None, s
         nisa.dma_copy(dst=ktok[:, 0:gn, :], src=k_f.ap(pattern=pat, offset=base))
         nisa.dma_copy(dst=vtok[:, 0:gn, :], src=v_f.ap(pattern=pat, offset=base))
         grow0 = nl.ndarray((3, U, C), dtype=nl.bfloat16, buffer=nl.sbuf)
-        nisa.dma_copy(dst=grow0[0:3, 0:gn, :], src=g_scr.ap(pattern=[[rows_total * C, 3], [n * C, gn], [1, C]],
-                                                             offset=(g0 * n + c) * C))
+        nisa.dma_copy(
+            dst=grow0[0:3, 0:gn, :],
+            src=g_scr.ap(
+                pattern=[[rows_total * C, 3], [n * C, gn], [1, C]], offset=(g0 * n + c) * C
+            ),
+        )
 
         rows = [row(g0 + j, c) for j in lanes]
 
         def colv(qi, j):
             r = rows[j]
-            return colq[:, qi, r:r + 1]
+            return colq[:, qi, r : r + 1]
 
         # decay exponent: E[p, f] = G_f + MASK[p, f]  (fp32 PSUM)
         pe = nl.ndarray((C, U, C), dtype=nl.float32, buffer=nl.psum)
@@ -233,12 +268,18 @@ def gdn_fast_kernel(q, k, v, g, beta, consts, s0=None, qt_in=None, kt_in=None, s
         EGb = nl.ndarray((D, U, C), dtype=cdt, buffer=nl.sbuf)  # scale e^{G_r}, all partitions
         nisa.activation(dst=EGb[:, 0:gn, :], op=nl.exp, data=pe[:, 0:gn, :], bias=ln_scale)
         # + MASK (identity stationary shared by the lanes -> one instruction), read by the exps below
-        nisa.nc_matmul(dst=pe[:, 0:gn, :], stationary=eye_c, moving=mask_c.expand_dim(1).broadcast(1, gn))
+        nisa.nc_matmul(
+            dst=pe[:, 0:gn, :], stationary=eye_c, moving=mask_c.expand_dim(1).broadcast(1, gn)
+        )
         Mb = nl.ndarray((C, U, C), dtype=cdt, buffer=nl.sbuf)  # beta_r exp(G_r - G_s), s <= r
         Ms = nl.ndarray((C, U, C), dtype=cdt, buffer=nl.sbuf)  # scale exp(G_r - G_s), s <= r
         for j in lanes:
-            nisa.activation(dst=Mb[:, j, :], op=nl.exp, data=pe[:, j, :], bias=colv(5, j), scale=-1.0)
-            nisa.activation(dst=Ms[:, j, :], op=nl.exp, data=pe[:, j, :], bias=colv(6, j), scale=-1.0)
+            nisa.activation(
+                dst=Mb[:, j, :], op=nl.exp, data=pe[:, j, :], bias=colv(5, j), scale=-1.0
+            )
+            nisa.activation(
+                dst=Ms[:, j, :], op=nl.exp, data=pe[:, j, :], bias=colv(6, j), scale=-1.0
+            )
         # Gram (k k^T) and QK^T
         pg = nl.ndarray((C, U, C), dtype=nl.float32, buffer=nl.psum)
         pq = nl.ndarray((C, U, C), dtype=nl.float32, buffer=nl.psum)
@@ -247,10 +288,20 @@ def gdn_fast_kernel(q, k, v, g, beta, consts, s0=None, qt_in=None, kt_in=None, s
             nisa.nc_matmul(dst=pq[:, j, :], stationary=qt[:, j, :], moving=kt[:, j, :])
         A = nl.ndarray((C, U, C), dtype=cdt, buffer=nl.sbuf)
         W = nl.ndarray((C, U, C), dtype=cdt, buffer=nl.sbuf)
-        nisa.tensor_tensor(dst=A[:, 0:gn, :], data1=pg[:, 0:gn, :], data2=Mb[:, 0:gn, :], op=nl.multiply,
-                           engine=nisa.engine.vector)
-        nisa.tensor_tensor(dst=W[:, 0:gn, :], data1=pq[:, 0:gn, :], data2=Ms[:, 0:gn, :], op=nl.multiply,
-                           engine=nisa.engine.vector)
+        nisa.tensor_tensor(
+            dst=A[:, 0:gn, :],
+            data1=pg[:, 0:gn, :],
+            data2=Mb[:, 0:gn, :],
+            op=nl.multiply,
+            engine=nisa.engine.vector,
+        )
+        nisa.tensor_tensor(
+            dst=W[:, 0:gn, :],
+            data1=pq[:, 0:gn, :],
+            data2=Ms[:, 0:gn, :],
+            op=nl.multiply,
+            engine=nisa.engine.vector,
+        )
         # W^T via PE transposes; (scale e^G q)^T = q^T * EGb
         ptw = nl.ndarray((C, U, C), dtype=cdt, buffer=nl.psum)
         for j in lanes:
@@ -258,19 +309,39 @@ def gdn_fast_kernel(q, k, v, g, beta, consts, s0=None, qt_in=None, kt_in=None, s
         Wt = nl.ndarray((C, U, C), dtype=cdt, buffer=nl.sbuf)
         qGt = nl.ndarray((D, U, C), dtype=cdt, buffer=nl.sbuf)
         nisa.tensor_copy(dst=Wt[:, 0:gn, :], src=ptw[:, 0:gn, :], engine=nisa.engine.vector)
-        nisa.tensor_tensor(dst=qGt[:, 0:gn, :], data1=qt[:, 0:gn, :], data2=EGb[:, 0:gn, :], op=nl.multiply,
-                           engine=nisa.engine.vector)
+        nisa.tensor_tensor(
+            dst=qGt[:, 0:gn, :],
+            data1=qt[:, 0:gn, :],
+            data2=EGb[:, 0:gn, :],
+            op=nl.multiply,
+            engine=nisa.engine.vector,
+        )
         # token-major scaled operands
         kd = nl.ndarray((C, U, D), dtype=cdt, buffer=nl.sbuf)
         kbg = nl.ndarray((C, U, D), dtype=cdt, buffer=nl.sbuf)
         vb = nl.ndarray((C, U, D), dtype=cdt, buffer=nl.sbuf)
         for j in lanes:
-            nisa.tensor_scalar(dst=kd[:, j, :], data=ktok[:, j, :], op0=nl.multiply, operand0=colv(2, j),
-                               engine=nisa.engine.vector)
-            nisa.tensor_scalar(dst=kbg[:, j, :], data=ktok[:, j, :], op0=nl.multiply, operand0=colv(3, j),
-                               engine=nisa.engine.vector)
-            nisa.tensor_scalar(dst=vb[:, j, :], data=vtok[:, j, :], op0=nl.multiply, operand0=colv(1, j),
-                               engine=nisa.engine.vector)
+            nisa.tensor_scalar(
+                dst=kd[:, j, :],
+                data=ktok[:, j, :],
+                op0=nl.multiply,
+                operand0=colv(2, j),
+                engine=nisa.engine.vector,
+            )
+            nisa.tensor_scalar(
+                dst=kbg[:, j, :],
+                data=ktok[:, j, :],
+                op0=nl.multiply,
+                operand0=colv(3, j),
+                engine=nisa.engine.vector,
+            )
+            nisa.tensor_scalar(
+                dst=vb[:, j, :],
+                data=vtok[:, j, :],
+                op0=nl.multiply,
+                operand0=colv(1, j),
+                engine=nisa.engine.vector,
+            )
 
         yield
         # ---- Schur inverse: InvT = (I + A)^-T, accumulated in fp32 PSUM
@@ -280,19 +351,35 @@ def gdn_fast_kernel(q, k, v, g, beta, consts, s0=None, qt_in=None, kt_in=None, s
         for lvl in range(N_LEVELS):
             pz = nl.ndarray((C, U, C), dtype=nl.float32, buffer=nl.psum)
             for j in lanes:
-                nisa.nc_matmul(dst=pz[:, j, :], stationary=A[:, j, :], moving=(eye_c if lvl == 0 else invT[:, j, :]))
+                nisa.nc_matmul(
+                    dst=pz[:, j, :],
+                    stationary=A[:, j, :],
+                    moving=(eye_c if lvl == 0 else invT[:, j, :]),
+                )
             mid = nl.ndarray((C, U, C), dtype=cdt, buffer=nl.sbuf)
-            nisa.tensor_tensor(dst=mid[:, 0:gn, :], data1=pz[:, 0:gn, :],
-                               data2=negoff[:, lvl:lvl + 1, :].broadcast(1, gn), op=nl.multiply,
-                               engine=nisa.engine.vector)
+            nisa.tensor_tensor(
+                dst=mid[:, 0:gn, :],
+                data1=pz[:, 0:gn, :],
+                data2=negoff[:, lvl : lvl + 1, :].broadcast(1, gn),
+                op=nl.multiply,
+                engine=nisa.engine.vector,
+            )
             if lvl > 0:
                 ptt = nl.ndarray((C, U, C), dtype=cdt, buffer=nl.psum)
                 for j in lanes:
-                    nisa.nc_transpose(dst=ptt[:, j, :], data=invT[:, j, :], engine=nisa.engine.tensor)
+                    nisa.nc_transpose(
+                        dst=ptt[:, j, :], data=invT[:, j, :], engine=nisa.engine.tensor
+                    )
                 inv = nl.ndarray((C, U, C), dtype=cdt, buffer=nl.sbuf)
-                nisa.tensor_copy(dst=inv[:, 0:gn, :], src=ptt[:, 0:gn, :], engine=nisa.engine.vector)
+                nisa.tensor_copy(
+                    dst=inv[:, 0:gn, :], src=ptt[:, 0:gn, :], engine=nisa.engine.vector
+                )
             if lvl == 0:
-                nisa.nc_matmul(dst=pinv[:, 0:gn, :], stationary=eye_c, moving=eye_c.expand_dim(1).broadcast(1, gn))
+                nisa.nc_matmul(
+                    dst=pinv[:, 0:gn, :],
+                    stationary=eye_c,
+                    moving=eye_c.expand_dim(1).broadcast(1, gn),
+                )
                 nisa.nc_matmul(dst=pinv[:, 0:gn, :], stationary=eye_c, moving=mid[:, 0:gn, :])
             else:
                 for j in lanes:
@@ -320,13 +407,20 @@ def gdn_fast_kernel(q, k, v, g, beta, consts, s0=None, qt_in=None, kt_in=None, s
         first = (c == 0) and not has_state
         delta = nl.ndarray((C, U, D), dtype=cdt, buffer=nl.sbuf)
         if first:
-            nisa.tensor_copy(dst=delta[:, 0:gn, :], src=a["u"][:, 0:gn, :], engine=nisa.engine.vector)
+            nisa.tensor_copy(
+                dst=delta[:, 0:gn, :], src=a["u"][:, 0:gn, :], engine=nisa.engine.vector
+            )
         else:
             p1 = nl.ndarray((C, U, D), dtype=nl.float32, buffer=nl.psum)
             for j in lanes:
                 nisa.nc_matmul(dst=p1[:, j, :], stationary=a["wT"][:, j, :], moving=sb[:, j, :])
-            nisa.tensor_tensor(dst=delta[:, 0:gn, :], data1=a["u"][:, 0:gn, :], data2=p1[:, 0:gn, :],
-                               op=nl.subtract, engine=nisa.engine.vector)
+            nisa.tensor_tensor(
+                dst=delta[:, 0:gn, :],
+                data1=a["u"][:, 0:gn, :],
+                data2=p1[:, 0:gn, :],
+                op=nl.subtract,
+                engine=nisa.engine.vector,
+            )
         p2 = nl.ndarray((C, U, D), dtype=nl.float32, buffer=nl.psum)
         for j in lanes:
             if not first:
@@ -338,11 +432,19 @@ def gdn_fast_kernel(q, k, v, g, beta, consts, s0=None, qt_in=None, kt_in=None, s
         ot = nl.ndarray((C, U, D), dtype=odt, buffer=nl.sbuf)
         nisa.activation(dst=ot[:, 0:gn, :], op=nl.copy, data=p2[:, 0:gn, :])
         base = (l_start + g0) * T * D + c * C * D
-        nisa.dma_copy(dst=o_f.ap(pattern=[[D, C], [T * D, gn], [1, D]], offset=base), src=ot[:, 0:gn, :])
+        nisa.dma_copy(
+            dst=o_f.ap(pattern=[[D, C], [T * D, gn], [1, D]], offset=base), src=ot[:, 0:gn, :]
+        )
         for j in lanes:
             r = row(g0 + j, c)
-            nisa.scalar_tensor_tensor(dst=s32[:, j, :], data=s32[:, j, :], op0=nl.multiply,
-                                      operand0=glb[:, r:r + 1], op1=nl.add, operand1=p3[:, j, :])
+            nisa.scalar_tensor_tensor(
+                dst=s32[:, j, :],
+                data=s32[:, j, :],
+                op0=nl.multiply,
+                operand0=glb[:, r : r + 1],
+                op1=nl.add,
+                operand1=p3[:, j, :],
+            )
         nisa.activation(dst=sb[:, 0:gn, :], op=nl.copy, data=s32[:, 0:gn, :])
 
     # ---------------- main schedule
@@ -351,12 +453,12 @@ def gdn_fast_kernel(q, k, v, g, beta, consts, s0=None, qt_in=None, kt_in=None, s
     # steps are interleaved between the stages, so every engine always has independent work queued.
     order = [(gi, c) for c in range(n) for gi in range(len(groups))]  # chunk-major
     jpb = max(1, min(jobs_per_batch, 4))  # >4 jobs in flight over-subscribes PSUM (8 banks)
-    batches = [order[i:i + jpb] for i in range(0, len(order), jpb)]
+    batches = [order[i : i + jpb] for i in range(0, len(order), jpb)]
     pending = []
     for batch in batches:
         results = []
         gens = []
-        for (gi, c) in batch:
+        for gi, c in batch:
             res = {}
             results.append((gi, c, res))
             gens.append(phase_a(gi, c, res))
@@ -381,21 +483,25 @@ def gdn_fast_kernel(q, k, v, g, beta, consts, s0=None, qt_in=None, kt_in=None, s
         phase_b(gi, c, res)
 
     for gi, (g0, gn) in enumerate(groups):
-        nisa.dma_copy(dst=s_out_f.ap(pattern=[[D, D], [D * D, gn], [1, D]], offset=(l_start + g0) * D * D),
-                      src=S32[gi][:, 0:gn, :])
+        nisa.dma_copy(
+            dst=s_out_f.ap(pattern=[[D, D], [D * D, gn], [1, D]], offset=(l_start + g0) * D * D),
+            src=S32[gi][:, 0:gn, :],
+        )
     return out, s_out
 
 
 # ----------------------------------------------------------------------------- torch wrapper
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _consts_cpu():
     import torch
+
     return torch.from_numpy(build_consts())
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _wrapped():
     from libtorch_neuronx_lite.nki.nki_hop import wrap_nki
+
     return wrap_nki(gdn_fast_kernel)
 
 
@@ -405,8 +511,22 @@ def gdn_fast_consts(device):
     return _consts_cpu().to(device)
 
 
-def gdn_fast(q, k, v, g, beta, consts, initial_state=None, scale=None, compute_dtype=None, out_dtype=None,
-             return_state=False, qt=None, kt=None, **knobs):
+def gdn_fast(
+    q,
+    k,
+    v,
+    g,
+    beta,
+    consts,
+    initial_state=None,
+    scale=None,
+    compute_dtype=None,
+    out_dtype=None,
+    return_state=False,
+    qt=None,
+    kt=None,
+    **knobs,
+):
     """Chunked GDN prefill on Neuron (callable inside torch.compile). See module docstring for layouts.
 
     q, k, v: [B, H, T, 128] (q, k L2-normalised); g, beta: [B, H, T] fp32; T % 128 == 0.
@@ -418,13 +538,22 @@ def gdn_fast(q, k, v, g, beta, consts, initial_state=None, scale=None, compute_d
     Returns out [B, H, T, 128] [, S_final [B, H, 128, 128] fp32 if return_state].
     """
     import torch
+
     cdt = compute_dtype or torch.bfloat16
     scale = k.shape[-1] ** -0.5 if scale is None else scale
     odt = out_dtype or cdt
-    nki_odt = {torch.bfloat16: nl.bfloat16, torch.float16: nl.float16, torch.float32: nl.float32}[odt]
+    nki_odt = {torch.bfloat16: nl.bfloat16, torch.float16: nl.float16, torch.float32: nl.float32}[
+        odt
+    ]
     q_arg = None if (q is None or qt is not None) else q.to(cdt).contiguous()
-    args = (q_arg, k.to(cdt).contiguous(), v.to(cdt).contiguous(), g.float().contiguous(),
-            beta.float().contiguous(), consts)
+    args = (
+        q_arg,
+        k.to(cdt).contiguous(),
+        v.to(cdt).contiguous(),
+        g.float().contiguous(),
+        beta.float().contiguous(),
+        consts,
+    )
     s0 = None if initial_state is None else initial_state.float().contiguous()
     if qt is not None:
         knobs = dict(knobs, qt_in=qt.to(cdt).contiguous(), kt_in=kt.to(cdt).contiguous())

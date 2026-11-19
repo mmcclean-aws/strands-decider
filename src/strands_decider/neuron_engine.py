@@ -83,6 +83,12 @@ class NeuronConfig:
     suffix_len: int = TILE
     suffix_batch: list[int] = field(default_factory=lambda: [2, 4, 6, 8])
     dtype: str = "bfloat16"
+    # The fused kernels (neuron_kernels/fused_ops.py, gdn_fast.py): 2.6x faster at 2,048 tokens
+    # than nkilib's kernels and torch for the rest of the layer. Off: nkilib's only.
+    fast_kernels: bool = True
+    # The fast Gated DeltaNet kernel's matmul operands: bfloat16, or float16 at the same speed
+    # with about 8x less rounding error in that kernel.
+    gdn_dtype: str = "bfloat16"
 
     def __post_init__(self) -> None:
         for name in ("buckets", "prefix_buckets"):
@@ -425,16 +431,18 @@ def load_neuron_engine(
     configure_environment()
     import libtorch_neuronx_lite  # noqa: F401  (registers the "neuron" device)
 
-    from .neuron_kernels import NkiMixers
+    from .neuron_kernels import FastGdn, NkiMixers
 
     device = torch.device("neuron", 0)
     mixers = NkiMixers(device)
+    fast = neuron_config.fast_kernels
     model = NeuronDeciderModel(
         shape,
         sd,
         compute_dtype=getattr(torch, neuron_config.dtype),
-        gdn_impl=mixers.gdn,
+        gdn_impl=FastGdn(device, getattr(torch, neuron_config.gdn_dtype)) if fast else mixers.gdn,
         attn_impl=mixers.attn,
+        fast=fast,
     )
     runtime = NeuronRuntime(model, device, n_shapes=len(neuron_config.shapes()))
     engine_config = replace(config or EngineConfig(), device="neuron")

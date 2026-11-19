@@ -22,7 +22,9 @@ PointerHead) with every shape fixed by its inputs:
     final recurrent state and the last K-1 pre-convolution tokens, per attention layer K and V.
 
 The two token mixers are pluggable (`gdn_impl`, `attn_impl`). The defaults here are the torch
-references, which CPU tests run; the engine swaps in NKI kernels on Trainium.
+references, which CPU tests run; the engine swaps in NKI kernels on Trainium. With `fast`, the
+rest of each layer runs through the fused kernels of neuron_kernels/fused_ops.py too, on weights
+laid out for them at construction (neuron_kernels/layouts.py); that needs the Neuron SDK.
 
 Only the 2B torso's layout is implemented: Gated DeltaNet with as many key heads as value heads
 and equal key and value head dims, default RoPE, no attention bias. Other layouts are refused at
@@ -388,6 +390,7 @@ class NeuronDeciderModel(nn.Module):
         compute_dtype: torch.dtype = torch.bfloat16,
         gdn_impl: GdnImpl | None = None,
         attn_impl: AttnImpl | None = None,
+        fast: bool = False,
     ) -> None:
         super().__init__()
         self.cfg = shape
@@ -399,6 +402,16 @@ class NeuronDeciderModel(nn.Module):
             self.register_buffer(
                 k.replace(".", "__"), v.float() if fp32 else v.to(compute_dtype), persistent=False
             )
+        self.fast = fast
+        self._fast_keys: dict[int, list[str]] = {}
+        if fast:
+            from .neuron_kernels import fused_ops, layouts
+
+            self._fo: Any = fused_ops
+            for i, prep in enumerate(layouts.prepare_layers(shape.layer_types, sd, compute_dtype)):
+                self._fast_keys[i] = list(prep)
+                for name, t in prep.items():
+                    self.register_buffer(f"fast__{i}__{name}", t, persistent=False)
 
     def w(self, name: str) -> torch.Tensor:
         t: torch.Tensor = getattr(self, name.replace(".", "__"))
@@ -407,6 +420,26 @@ class NeuronDeciderModel(nn.Module):
     def _reduce(self, y: torch.Tensor) -> torch.Tensor:
         """A layer's output projection, summed over tensor-parallel ranks (none here)."""
         return y
+
+    @property
+    def _red(self) -> Callable[[torch.Tensor], torch.Tensor] | None:
+        """`_reduce` for the fused layers, which skip it when None."""
+        return None
+
+    def prep(self, i: int, prefix: str = "") -> dict[str, torch.Tensor]:
+        """Layer i's weights in the fused kernels' layouts: `prefix` "attn_" for an attention
+        layer's own, "" for the rest."""
+        return {
+            k[len(prefix) :]: getattr(self, f"fast__{i}__{k}")
+            for k in self._fast_keys[i]
+            if k.startswith(prefix) and (prefix or not k.startswith("attn_"))
+        }
+
+    def _mlp(self, i: int, x: torch.Tensor) -> torch.Tensor:
+        if self.fast:
+            out: torch.Tensor = self._fo.mlp_fast(x, self.prep(i), self.cfg.eps, reduce=self._red)
+            return out
+        return self.mlp(i, x)
 
     # --- layers
 
@@ -482,12 +515,27 @@ class NeuronDeciderModel(nn.Module):
         x = self._embed(input_ids)
         cos, sin = rope_cos_sin(input_ids.shape[1], c.rope_dim, c.rope_theta, x.device, x.dtype)
         for i, lt in enumerate(c.layer_types):
-            x = (
-                self.gdn_layer(i, x)
-                if lt == "linear_attention"
-                else self.attn_layer(i, x, cos, sin)
-            )
-            x = self.mlp(i, x)
+            if not self.fast:
+                x = (
+                    self.gdn_layer(i, x)
+                    if lt == "linear_attention"
+                    else self.attn_layer(i, x, cos, sin)
+                )
+            elif lt == "linear_attention":
+                x = self._fo.gdn_layer_fast(x, self.prep(i), self.gdn_impl, c.eps, reduce=self._red)
+            else:
+                x = self._fo.attn_layer_fast(
+                    x,
+                    self.prep(i, "attn_"),
+                    self.attn_impl,
+                    cos,
+                    sin,
+                    c.nq,
+                    c.nkv,
+                    c.eps,
+                    reduce=self._red,
+                )
+            x = self._mlp(i, x)
         return rms_norm(x, self.w("final_norm"), c.eps)
 
     def readout(

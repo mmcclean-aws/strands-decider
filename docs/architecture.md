@@ -349,7 +349,9 @@ src/strands_decider/              -- published package (inference only)
                   ahead-of-time compilation on AWS Trainium
   neuron_engine.py serving on AWS Trainium (--device neuron): compiled shapes; the engine
                   otherwise infer.py's
-  neuron_kernels/ nkilib's Gated DeltaNet and attention kernels for neuron_model.py
+  neuron_kernels/ NKI kernels for neuron_model.py: nkilib's attention, a WY-form Gated DeltaNet
+                  chunk rule (gdn_fast.py), the fused layer prologue and epilogue
+                  (fused_ops.py), and their weight layouts (layouts.py)
   server.py       FastAPI, POST /v1/systemone
   cli.py          the strands-decider command (ask / serve / info)
   hf_export.py    a checkpoint as a Hugging Face model folder (safetensors, card, manifest)
