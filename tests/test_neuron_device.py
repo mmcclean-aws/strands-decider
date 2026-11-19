@@ -125,7 +125,11 @@ def test_every_shape_compiles_and_runs(engines):
 
 # ---- the kernels alone, against the torch references (fp32 on the CPU)
 
-DEV = torch.device("neuron", 0)
+
+def _device():
+    import libtorch_neuronx_lite  # noqa: F401  (registers the "neuron" device)
+
+    return torch.device("neuron", 0)
 
 
 def _compile(fn):
@@ -157,11 +161,14 @@ def test_gdn_fast_matches_the_reference(B, T, state):
 
     q, k, v, g, beta = _gdn_inputs(B, T, seed=B * 7 + T)
     S0 = torch.randn(B, 16, 128, 128) * 0.05 if state else None
-    core = FastGdn(DEV)
+    core = FastGdn(_device())
     fn = _compile(lambda *a: core(*a, return_state=True))
-    args = [x.to(torch.bfloat16).to(DEV) for x in (q, k, v)] + [g.to(DEV), beta.to(DEV)]
+    args = [x.to(torch.bfloat16).to(_device()) for x in (q, k, v)] + [
+        g.to(_device()),
+        beta.to(_device()),
+    ]
     if state:
-        args.append(S0.to(DEV))
+        args.append(S0.to(_device()))
     with torch.inference_mode():
         out, final = fn(*args)
     qq, kk, vv = (x.to(torch.bfloat16).float() for x in (q, k, v))
@@ -185,11 +192,11 @@ def test_the_fused_prologue_and_norms_match_their_references(T):
     fn = _compile(lambda p, w, z, ab, h: fused_ops.gdn_prologue(p, w, z, ab, conv_hist=h))
     with torch.inference_mode():
         out = fn(
-            proj_hm.permute(0, 1, 3, 2).contiguous().to(DEV),
-            layouts.conv_diag_from_conv_w(conv_w).to(DEV),
-            zba.to(DEV),
-            torch.stack([A, dtb], 1).contiguous().to(DEV),
-            hist.to(DEV),
+            proj_hm.permute(0, 1, 3, 2).contiguous().to(_device()),
+            layouts.conv_diag_from_conv_w(conv_w).to(_device()),
+            zba.to(_device()),
+            torch.stack([A, dtb], 1).contiguous().to(_device()),
+            hist.to(_device()),
         )
     for name, got, want in zip(["q", "k", "v", "g", "beta"], out, ref, strict=True):
         assert _rel(got, want) <= 5e-3, name
@@ -197,7 +204,7 @@ def test_the_fused_prologue_and_norms_match_their_references(T):
     x = (torch.randn(B, T, 2048, generator=g) * 0.5).to(bf)
     ln = 1 + 0.1 * torch.randn(2048, generator=g)
     with torch.inference_mode():
-        got = _compile(fused_ops.rms_norm_nki)(x.to(DEV), ln.to(DEV))
+        got = _compile(fused_ops.rms_norm_nki)(x.to(_device()), ln.to(_device()))
     assert _rel(got, rms_norm(x.float(), ln, 1e-6)) <= 5e-3
 
     o = (torch.randn(B, 16, T, 128, generator=g) * 0.3).to(bf)
@@ -207,5 +214,7 @@ def test_the_fused_prologue_and_norms_match_their_references(T):
         gated_rms_norm(o.float(), z.float(), gn.float(), 1e-6).transpose(1, 2).reshape(B, T, 2048)
     )
     with torch.inference_mode():
-        got = _compile(fused_ops.gated_rms_norm_nki)(o.to(DEV), zba.to(DEV), gn.to(DEV))
+        got = _compile(fused_ops.gated_rms_norm_nki)(
+            o.to(_device()), zba.to(_device()), gn.to(_device())
+        )
     assert _rel(got, want) <= 5e-3

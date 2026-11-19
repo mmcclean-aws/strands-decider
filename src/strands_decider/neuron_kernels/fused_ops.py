@@ -41,9 +41,10 @@ import nki.language as nl
 import torch
 
 from . import LNC
-from .layouts import K_CONV, L2_EPS, P, _rms_norm, conv_tail_fm
+from .layouts import K_CONV, L2_EPS, P, _rms_norm, conv_tail_fm, mlp_fast
 
-__all__ = ["K_CONV", "L2_EPS", "P"]
+# Re-exported: the model runs every fused layer through this module.
+__all__ = ["K_CONV", "L2_EPS", "P", "mlp_fast"]
 
 
 # ===================================================================================== (A) kernel

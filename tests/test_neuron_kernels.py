@@ -136,3 +136,23 @@ def test_the_attention_layouts_hold_the_model_projections(model_and_sd):
     expected = torch.einsum("bhtd,chd->btc", o, model.w(f"layers.{i}.w_o"))
     got = o.transpose(1, 2).reshape(x.shape[0], x.shape[1], -1) @ prep["w_o_t"]
     torch.testing.assert_close(got, expected, atol=1e-4, rtol=1e-4)
+
+
+def test_every_fused_function_the_model_calls_is_in_fused_ops():
+    """fused_ops imports nki, so CI cannot import it; read its top-level names instead."""
+    import ast
+    import inspect
+    import re
+
+    from strands_decider import neuron_model
+    from strands_decider.neuron_kernels import layouts
+
+    path = layouts.__file__.replace("layouts.py", "fused_ops.py")
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    names = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
+    names |= {
+        a.asname or a.name for n in tree.body if isinstance(n, ast.ImportFrom) for a in n.names
+    }
+    used = set(re.findall(r"\b_?fo\.(\w+)", inspect.getsource(neuron_model)))
+    assert used and used <= names, sorted(used - names)
