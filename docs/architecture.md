@@ -347,6 +347,9 @@ src/strands_decider/              -- published package (inference only)
   mlx_engine.py   serving with the torso on MLX (--device mlx); the engine otherwise infer.py's
   neuron_model.py the torso and pointer readout as one static-shape module, LoRA merged, for
                   ahead-of-time compilation on AWS Trainium
+  neuron_engine.py serving on AWS Trainium (--device neuron): compiled shapes; the engine
+                  otherwise infer.py's
+  neuron_kernels/ nkilib's Gated DeltaNet and attention kernels for neuron_model.py
   server.py       FastAPI, POST /v1/systemone
   cli.py          the strands-decider command (ask / serve / info)
   hf_export.py    a checkpoint as a Hugging Face model folder (safetensors, card, manifest)

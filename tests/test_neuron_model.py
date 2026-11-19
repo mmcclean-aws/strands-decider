@@ -41,15 +41,14 @@ LORA_TARGETS = [
 VOCAB = 96
 
 
-def _tokenizer():
+def _tokenizer(words=()):
+    """A word-level tokenizer: the given words, then filler words up to VOCAB."""
     from tokenizers import Tokenizer, models, pre_tokenizers
     from transformers import PreTrainedTokenizerFast
 
-    vocab = {
-        w: i
-        for i, w in enumerate(["<pad>", "<eos>", "<unk>"] + [f"w{i}" for i in range(VOCAB - 3)])
-    }
-    tok = Tokenizer(models.WordLevel(vocab, unk_token="<unk>"))
+    names = ["<pad>", "<eos>", "<unk>", *sorted(set(words))]
+    names += [f"w{i}" for i in range(max(0, VOCAB - len(names)))]
+    tok = Tokenizer(models.WordLevel({w: i for i, w in enumerate(names)}, unk_token="<unk>"))
     tok.pre_tokenizer = pre_tokenizers.Whitespace()
     return PreTrainedTokenizerFast(
         tokenizer_object=tok, pad_token="<pad>", eos_token="<eos>", unk_token="<unk>"
@@ -75,12 +74,13 @@ def _base_config(**overrides):
     return transformers.Qwen3_5TextConfig(**kw)
 
 
-@pytest.fixture(scope="module")
-def checkpoint(tmp_path_factory):
-    tmp = tmp_path_factory.mktemp("neuron_model")
+def build_checkpoint(tmp, words=(), max_length=512):
+    """A decider checkpoint on a tiny random Qwen3.5, saved as training saves one, with a
+    LoRA adapter and readout that change the answers. Returns its path."""
+    tok = _tokenizer(words)
     torch.manual_seed(0)
     base = tmp / "base"
-    lm = transformers.Qwen3_5ForCausalLM(_base_config())
+    lm = transformers.Qwen3_5ForCausalLM(_base_config(vocab_size=len(tok)))
     with torch.no_grad():  # the norms start at zero (1 + w = 1): give the (1 + w) fold work
         for name, p in lm.named_parameters():
             if "norm" in name:
@@ -89,7 +89,7 @@ def checkpoint(tmp_path_factory):
     cfg = StrandsDeciderConfig(
         base_model=str(base),
         pointer_dim=16,
-        max_length=512,
+        max_length=max_length,
         torch_dtype="float32",
         lora_r=4,
         lora_alpha=8,
@@ -97,7 +97,7 @@ def checkpoint(tmp_path_factory):
         temperature_by_kind={"choice": 1.7, "noul": 0.8},
     )
     torso = transformers.Qwen3_5ForCausalLM.from_pretrained(base).model
-    model = StrandsDeciderModel(cfg, torso, _tokenizer())
+    model = StrandsDeciderModel(cfg, torso, tok)
     model.attach_lora()
     with torch.no_grad():  # lora_B starts at zero: make the adapter change the torso
         for name, p in model.torso.named_parameters():
@@ -108,6 +108,11 @@ def checkpoint(tmp_path_factory):
     path = tmp / "ckpt"
     model.save_pretrained(str(path))
     return str(path)
+
+
+@pytest.fixture(scope="module")
+def checkpoint(tmp_path_factory):
+    return build_checkpoint(tmp_path_factory.mktemp("neuron_model"))
 
 
 @pytest.fixture(scope="module")

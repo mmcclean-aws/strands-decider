@@ -46,6 +46,17 @@ mlx = [
     "mlx>=0.32.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "mlx-lm>=0.32,<0.33; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
+# `--device neuron`: AWS Trainium through the Neuron SDK's PyTorch-native backend
+# (src/strands_decider/neuron_engine.py). The packages are on the Neuron repository, not PyPI,
+# which holds 0.0.1 placeholders under these names; the floors make an install without the
+# Neuron index fail instead of installing those:
+#   pip install "strands-decider[neuron]" --extra-index-url https://pip.repos.neuron.amazonaws.com
+# nkilib, which the kernels also need, ships in the Neuron Deep Learning Container image only.
+neuron = [
+    "libtorch-neuronx-lite>=2.13; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nki>=0.7; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "neuronx-cc>=2.28; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
 # `--device cuda`: flash-linear-attention's Triton kernels for the Gated DeltaNet layers. The conv
 # layer's kernel, causal-conv1d, compiles against the local CUDA toolkit and is not listed; on a
 # machine with nvcc: pip install causal-conv1d --no-build-isolation.
@@ -139,6 +150,9 @@ module = [
     "yaml",
     "mlx.*",
     "mlx_lm.*",
+    "libtorch_neuronx_lite.*",
+    "nki.*",
+    "nkilib.*",
     "PIL.*",
     "tokenizers",
 ]
@@ -153,6 +167,7 @@ pythonpath = [".", "evaluation", "tests", "training/tests"]
 addopts = "-m 'not distributed'"
 markers = [
     "distributed: launches torchrun worker processes (minutes); run with -m distributed",
+    "neuron: needs AWS Trainium and the Neuron SDK; skips elsewhere",
 ]
 
 [tool.coverage.report]

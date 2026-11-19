@@ -444,9 +444,14 @@ def load_engine(
     use_prefix_cache: bool = True,
     attn_implementation: str | None = None,
 ) -> SystemOneEngine:
-    """An engine on a torch device ("cuda", "mps", "cpu"), or on MLX with `device="mlx"`."""
+    """An engine on a torch device ("cuda", "mps", "cpu"), on MLX with `device="mlx"`, or on
+    AWS Trainium with `device="neuron"`."""
     if device == "mlx":
         return load_mlx(checkpoint, EngineConfig(device="mlx", use_prefix_cache=use_prefix_cache))
+    if device == "neuron":
+        return load_neuron(
+            checkpoint, EngineConfig(device="neuron", use_prefix_cache=use_prefix_cache)
+        )
     model = StrandsDeciderModel.load(checkpoint, attn_implementation=attn_implementation)
     refuse_token_readout(model.config)
     return SystemOneEngine(model, EngineConfig(device=device, use_prefix_cache=use_prefix_cache))
@@ -483,3 +488,11 @@ def load_mlx(checkpoint: str, config: EngineConfig | None = None) -> SystemOneEn
     from .mlx_engine import load_mlx_engine
 
     return load_mlx_engine(checkpoint, config)
+
+
+def load_neuron(checkpoint: str, config: EngineConfig | None = None) -> SystemOneEngine:
+    """An engine on AWS Trainium (see neuron_engine.py), configured as a torch engine is.
+    Raises RuntimeError, naming the install, without a Neuron device and SDK."""
+    from .neuron_engine import load_neuron_engine
+
+    return load_neuron_engine(checkpoint, config)

@@ -5,15 +5,16 @@ from the command line, and serve it over HTTP. Strands decider answers typed que
 state, the text to classify; it does not generate text. A question is a `noul` (yes or no,
 returned as P(true)), a `choice` (one of N options) or a `score` (a level on an ordered
 scale). Install the package, point the commands at the published Hub id or at a checkpoint you
-trained, then `strands-decider ask` or `strands-decider serve`. Pass `--device cuda`, `mps`, `cpu` or `mlx`
-explicitly; without it the CLI picks cuda, then mps, then cpu, and mlx only when asked for. A
+trained, then `strands-decider ask` or `strands-decider serve`. Pass `--device cuda`, `mps`, `cpu`, `mlx` or
+`neuron` explicitly; without it the CLI picks cuda, then mps, then cpu, and mlx or neuron only
+when asked for. A
 checkpoint from `training/recipe.sh all` is already calibrated; calibrate any other
 checkpoint with `python -m training.evaluate calibrate` before you serve it.
 
 `eval` and `calibrate` also accept `--device cuda`, `mps`, or `cpu` and use the same
-cuda > mps > cpu selection when omitted. They use torch; MLX is an `ask`/`serve` backend only. They
+cuda > mps > cpu selection when omitted. They use torch; MLX and neuron are `ask`/`serve` backends only. They
 prepare the model as `serve` does on that device (the MPS and CPU kernels, an fp32 torso on
-CPU), so they report the numbers serving returns. `--device mlx` is refused.
+CPU), so they report the numbers serving returns. `--device mlx` and `--device neuron` are refused.
 
 - [Environments for serving](#environments-for-serving): Linux with CUDA, a Mac, or CPU.
 - [Model artifact](#model-artifact): what a checkpoint holds, and the Hugging Face export.
@@ -22,6 +23,7 @@ CPU), so they report the numbers serving returns. `--device mlx` is refused.
 - [Asking many questions is nearly free](#asking-many-questions-is-nearly-free): the shared-prefix cache.
 - [Serving on a Mac](#serving-on-a-mac): MPS, and the one kernel that had to be replaced.
 - [Serving on a Mac with MLX](#serving-on-a-mac-with-mlx): `--device mlx`, measured against MPS.
+- [Serving on AWS Trainium](#serving-on-aws-trainium): `--device neuron`, graphs compiled ahead of time.
 - [Deployment guide](../deploy/README.md): hosting the server, for example on an Amazon SageMaker
   real-time endpoint.
 - [Strands Agents example](../examples/strands/README.md): an agent built with the Strands
@@ -54,6 +56,7 @@ from a clone, for example `pip install -e ".[mlx]"`.
 | `mps` | `pip install "strands-decider[mps]"` | Nothing: the base install. |
 | `cpu` | `pip install "strands-decider[cpu]"` | Nothing: the base install. |
 | `mlx` | `pip install "strands-decider[mlx]"` | mlx and mlx-lm (Apple silicon only). |
+| `neuron` | `pip install "strands-decider[neuron]" --extra-index-url https://pip.repos.neuron.amazonaws.com` | The Neuron SDK's PyTorch-native backend (Linux x86 with Trainium). It also needs nkilib, which ships in the Neuron Deep Learning Container image: [Serving on AWS Trainium](#serving-on-aws-trainium). |
 
 flash-linear-attention installs on a Mac without Triton, but its kernels need Triton, so it
 cannot run there. `mps_kernels.py` therefore steps aside only when Triton is present too, and
@@ -385,3 +388,37 @@ trainable token embeddings, per-module ranks and quantised base weights. `--dtyp
 (`mlx_engine.DEFAULT_CACHE_LIMIT`); MLX's own default is its memory limit, nearly all of RAM.
 Evaluations run one at a time, because `_fit` keeps a request's option offsets on the engine for
 `_option_idx` to read; the torch engine has the same race (#9).
+
+## Serving on AWS Trainium
+
+`--device neuron` runs the model on one logical NeuronCore of an AWS Trainium2 instance through
+the Neuron SDK's PyTorch-native backend (`libtorch_neuronx_lite`, no NxDI or vLLM)
+([`neuron_engine.py`](../src/strands_decider/neuron_engine.py)). Run it inside the Neuron Deep
+Learning Container for PyTorch inference, which has the SDK and nkilib, and install the package
+there with the `neuron` extra. The extra names the Neuron packages; PyPI has only placeholders
+under those names, so the install needs the Neuron index:
+
+```bash
+pip install -e ".[neuron]" --extra-index-url https://pip.repos.neuron.amazonaws.com
+NEURON_RT_VISIBLE_CORES=0 strands-decider serve StrandsAgents/strands-decider-2B-qwen3.5-v1-2610 \
+  --device neuron --port 8099
+```
+
+The model is compiled ahead of time, one graph per input shape, so the engine pads every forward
+to a bucket: whole prompts to 256 ... 4,096 tokens, at a few batch sizes for the short ones; a
+shared state to the same buckets; question suffixes to 128 tokens (`neuron_engine.NeuronConfig`).
+The LoRA adapter is merged into the bf16 weights at load, and the readout runs on the device
+([`neuron_model.py`](../src/strands_decider/neuron_model.py)). As on other devices, one question
+forwards the whole prompt and several share the state's caches; a state over 4,096 tokens or a
+question over 128 tokens takes whole prompts. `serve` compiles every shape before it accepts
+requests, and the Neuron SDK caches the compiled graphs on disk
+(`NEURON_LIBTORCH_CACHE_ROOT`), so only the first start is slow.
+
+One server uses one logical core (`NEURON_RT_VISIBLE_CORES`). The engine sets the runtime's
+environment unless it is set already: `VLLM_NEURON_BACKEND=neuron_native`, and a
+`NEURON_RT_ROOT_COMM_ID` port that follows the first visible core, so servers on different
+cores do not collide.
+
+Limits. A question may have at most 32 options (`NeuronConfig.k_pad`); more is refused with
+HTTP 422. Only the 2B Qwen3.5 torso's layout is implemented, and only the pointer head. Image
+input (`--vision`) is not supported. Evaluations run one at a time on the core.
