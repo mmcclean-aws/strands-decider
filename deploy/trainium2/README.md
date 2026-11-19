@@ -31,7 +31,10 @@ The engine sets the runtime variables it needs unless they are set: `VLLM_NEURON
 (before `libtorch_neuronx_lite` is imported), a `NEURON_RT_ROOT_COMM_ID` port that follows the
 first visible core, `NEURON_RT_IO_RING_CACHE_SIZE=32` and
 `NEURON_RT_XU_COMPUTE_MAX_QUEUED_REQUESTS=32`. Set `NEURON_LIBTORCH_CACHE_ROOT` to a directory
-that outlives the container, so the compiled graphs are kept between starts.
+that outlives the container, so the compiled graphs are kept between starts. Do not share
+torch's own compile cache (`TORCHINDUCTOR_CACHE_DIR`) between hosts: its entries name NKI kernel
+files under `/var/tmp/nki-intermediate-cache` on the host that compiled them, and on another host
+the compile fails with `NCC_EVRF059`.
 
 ## One server
 
