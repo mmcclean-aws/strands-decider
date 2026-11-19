@@ -165,8 +165,21 @@ def main() -> None:
             ap.error("give at least two --device values, or --reference and one --device")
         ref_device = devices.pop(0)
         results = {ref_device: answer_rows(args.checkpoint, ref_device, examples)}
+
+    def save(report: dict) -> None:
+        # After every device, so a device that fails leaves the reference's rows to reuse.
+        if args.out:
+            with open(args.out, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {"reference_device": ref_device, "report": report, "rows": results},
+                    fh,
+                    indent=1,
+                )
+
+    save({})
     for device in devices:
         results[device] = answer_rows(args.checkpoint, device, examples)
+        save({})
     report = {d: compare(examples, results[ref_device], results[d]) for d in devices}
     for device, r in report.items():
         print(
@@ -178,11 +191,7 @@ def main() -> None:
             f"{r['device']['nll']:.4f} / {r['reference']['nll']:.4f}: "
             + ("PASS" if r["pass"] else "FAIL")
         )
-    if args.out:
-        with open(args.out, "w", encoding="utf-8") as fh:
-            json.dump(
-                {"reference_device": ref_device, "report": report, "rows": results}, fh, indent=1
-            )
+    save(report)
 
 
 if __name__ == "__main__":
