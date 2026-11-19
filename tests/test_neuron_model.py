@@ -250,3 +250,15 @@ def test_a_token_readout_checkpoint_is_refused(checkpoint):
     model.config = dataclasses.replace(model.config, head_type="token_readout")
     with pytest.raises(ValueError, match="token_readout"):
         from_decider_model(model)
+
+
+def test_the_adapter_loads_on_the_cpu_whatever_accelerator_torch_reports(checkpoint, monkeypatch):
+    # With libtorch_neuronx_lite imported, torch.accelerator reports "neuron"; PEFT would stage
+    # the adapter there, and safetensors cannot address it.
+    class _Neuron:
+        type = "neuron"
+
+    monkeypatch.setattr(torch.accelerator, "is_available", lambda: True)
+    monkeypatch.setattr(torch.accelerator, "current_accelerator", lambda *a, **k: _Neuron())
+    model = StrandsDeciderModel.load(checkpoint)
+    assert {p.device.type for p in model.torso.parameters()} == {"cpu"}

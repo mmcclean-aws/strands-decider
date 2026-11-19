@@ -416,16 +416,17 @@ def load_neuron_engine(
     if not neuron_available():
         raise RuntimeError(INSTALL_HINT)
     neuron_config = neuron_config or NeuronConfig()
-    configure_environment()
-    import libtorch_neuronx_lite  # noqa: F401  (registers the "neuron" device)
-
-    from .neuron_kernels import NkiMixers
-
+    # The weights load and convert on the CPU, before the Neuron runtime starts.
     decider = StrandsDeciderModel.load(checkpoint)
     refuse_token_readout(decider.config)
     config_, tokenizer = decider.config, decider.tokenizer
     shape, sd = from_decider_model(decider, dtype=getattr(torch, neuron_config.dtype))
     del decider
+    configure_environment()
+    import libtorch_neuronx_lite  # noqa: F401  (registers the "neuron" device)
+
+    from .neuron_kernels import NkiMixers
+
     device = torch.device("neuron", 0)
     mixers = NkiMixers(device)
     model = NeuronDeciderModel(
