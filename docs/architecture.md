@@ -345,6 +345,8 @@ src/strands_decider/              -- published package (inference only)
   mps_kernels.py  Gated DeltaNet chunk rule for Apple-silicon serving (no fla on macOS)
   cpu_kernels.py  the Gated DeltaNet depthwise causal conv for CPU inference
   mlx_engine.py   serving with the torso on MLX (--device mlx); the engine otherwise infer.py's
+  neuron_model.py the torso and pointer readout as one static-shape module, LoRA merged, for
+                  ahead-of-time compilation on AWS Trainium
   server.py       FastAPI, POST /v1/systemone
   cli.py          the strands-decider command (ask / serve / info)
   hf_export.py    a checkpoint as a Hugging Face model folder (safetensors, card, manifest)
