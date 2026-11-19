@@ -29,6 +29,8 @@ script also runs on its own:
 | [`calibrate_mix.py`](calibrate_mix.py) | Refits the temperatures on every held-out set, into a copy of the checkpoint (v19-calmix) |
 | [`bench_local.py`](bench_local.py) | Inference latency against the engine, by state length and question count, on any device |
 | [`device_parity.py`](device_parity.py) | Whether two or more devices give one checkpoint the same answers: the largest probability difference and the answers that change, against the first device |
+| [`device_accuracy.py`](device_accuracy.py) | Whether a device keeps a checkpoint's accuracy on the 1,019 labeled eval rows: \|dp\| and changed answers against a reference device, accuracy, ECE and NLL for both, and a pass or fail at the bf16 floor |
+| [`bench_neuron.py`](bench_neuron.py) | Latency, pipelined throughput and MFU of the compiled forward on one AWS Trainium NeuronCore (`--device neuron`), by token count and batch size |
 | [`jevbench/jevbench.sh`](jevbench/jevbench.sh) | The JevBench public set against `strands-decider serve` on one GPU, at the JevBench commit the script pins |
 | [`jevbench/paired.py`](jevbench/paired.py) | A per-task comparison of two JevBench runs, with an exact McNemar test |
 | [`vision/run.py`](vision/run.py) | Image input (`--vision`): NaturalBench and POPE, with and without the image, against two baselines ([vision/](vision/README.md)) |

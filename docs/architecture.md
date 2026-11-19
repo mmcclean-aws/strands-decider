@@ -401,7 +401,9 @@ evaluation/       README.md -- how the model is measured, and the results;
                   calibrate_mix.py (the v19 recalibration experiment), pair_accuracy.py
                   (v10's minimal pairs), bench_local.py (latency by state length and
                   question count, any device), device_parity.py (one checkpoint's answers
-                  on several devices, against the first);
+                  on several devices, against the first), device_accuracy.py (a device's
+                  accuracy, ECE and NLL on the labeled eval sets, gated against a reference
+                  device), bench_neuron.py (the compiled forward's latency and MFU on Trainium);
                   jevbench/ -- jevbench.sh (the external benchmark on a served checkpoint),
                   paired.py (McNemar against a recorded run), jevbench_cold_warm.py (each
                   task twice: first request against repeat)
