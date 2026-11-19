@@ -425,6 +425,13 @@ environment unless it is set already: `VLLM_NEURON_BACKEND=neuron_native`, and a
 `NEURON_RT_ROOT_COMM_ID` port that follows the first visible core, so servers on different
 cores do not collide.
 
+**Tensor parallel (experimental).** A long state is latency-bound on one core.
+`python -m strands_decider.neuron_tp serve CKPT --tensor-parallel 2 --core-base 12 --port 8099`
+serves one model over two adjacent logical cores of one chip ([`neuron_tp.py`](../src/strands_decider/neuron_tp.py)):
+each layer's heads and MLP are split over the ranks, one process per core, and each layer's
+output is all-reduced inside the compiled graph. Rank 0 serves HTTP and broadcasts each request
+to the other ranks, which answer it with it. It is not part of `strands-decider serve` yet.
+
 Limits. A question may have at most 32 options (`NeuronConfig.k_pad`); more is refused with
 HTTP 422. Only the 2B Qwen3.5 torso's layout is implemented, and only the pointer head. Image
 input (`--vision`) is not supported. Evaluations run one at a time on the core.

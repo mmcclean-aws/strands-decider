@@ -33,6 +33,7 @@ load.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -215,6 +216,67 @@ def relayout(
             sd[p + "k_norm"] = 1.0 + raw[a + "k_norm.weight"].float()
             sd[p + "w_o"] = raw[a + "o_proj.weight"].reshape(H, nq, hd).to(dtype)
     return sd
+
+
+def shard(
+    c: TorsoShape, sd: dict[str, torch.Tensor], rank: int, world: int
+) -> tuple[TorsoShape, dict[str, torch.Tensor]]:
+    """Rank `rank`'s shard of `relayout`'s weights for tensor parallel over `world` ranks
+    (Megatron-style): the Gated DeltaNet and attention query heads and the MLP's intermediate
+    dimension split evenly; the key/value heads split while there are at least as many as
+    ranks, else rank r reads head r * nkv // world; the embedding, norms and readout whole.
+    Each layer's output projection then holds a partial sum, which `_reduce` all-reduces."""
+    if world == 1:
+        return c, sd
+    if c.gh % world or c.nq % world or c.inter % world:
+        raise ValueError(
+            f"tensor parallel over {world} ranks needs it to divide {c.gh} Gated DeltaNet heads, "
+            f"{c.nq} query heads and an MLP of {c.inter}"
+        )
+    hl, ql, il = c.gh // world, c.nq // world, c.inter // world
+    kvl = max(1, c.nkv // world)
+    kv0 = (rank * c.nkv) // world if world > c.nkv else rank * kvl
+    hs, qs, kvs = (
+        slice(rank * hl, (rank + 1) * hl),
+        slice(rank * ql, (rank + 1) * ql),
+        slice(kv0, kv0 + kvl),
+    )
+    ins = slice(rank * il, (rank + 1) * il)
+    gh, nq, nkv, inter = c.gh, c.nq, c.nkv, c.inter
+    out: dict[str, torch.Tensor] = {}
+    for k, v in sd.items():
+        name = k.rsplit(".", 1)[-1]
+        if name == "w_qkvz":  # q, k, v, z heads
+            t = torch.cat([v[j * gh : (j + 1) * gh][hs] for j in range(4)], 0)
+        elif name == "conv_w":  # q, k, v heads
+            t = torch.cat([v[j * gh : (j + 1) * gh][hs] for j in range(3)], 0)
+        elif name == "w_ba":  # b, a per head
+            t = torch.cat([v[:gh][hs], v[gh:][hs]], 0)
+        elif name in ("A", "dt_bias"):
+            t = v[hs]
+        elif name == "w_out":  # [hidden, heads, dims]
+            t = v[:, hs]
+        elif name == "w_qgkv":  # q, gate, k, v heads
+            t = torch.cat(
+                [
+                    v[:nq][qs],
+                    v[nq : 2 * nq][qs],
+                    v[2 * nq : 2 * nq + nkv][kvs],
+                    v[2 * nq + nkv :][kvs],
+                ],
+                0,
+            )
+        elif name == "w_o":
+            t = v[:, qs]
+        elif name == "w_gate_up":
+            t = torch.cat([v[:inter][ins], v[inter:][ins]], 0)
+        elif name == "w_down":
+            t = v[:, ins]
+        else:
+            t = v
+        out[k] = t.contiguous()
+    local = dataclasses.replace(c, gh=hl, nq=ql, nkv=kvl, inter=il)
+    return local, out
 
 
 # ------------------------------------------------------------------ math
@@ -417,14 +479,30 @@ class NeuronDeciderModel(nn.Module):
         t: torch.Tensor = getattr(self, name.replace(".", "__"))
         return t
 
+    # Tensor parallel (see `shard`): the process group whose ranks each hold one shard, and the
+    # number of token chunks each layer's tail is split into, so that one chunk's all-reduce
+    # can run while the next chunk computes.
+    tp_group: Any = None
+    tp_chunks: int = 1
+
     def _reduce(self, y: torch.Tensor) -> torch.Tensor:
-        """A layer's output projection, summed over tensor-parallel ranks (none here)."""
-        return y
+        """A layer's output projection, summed over the tensor-parallel ranks, inside the graph."""
+        if self.tp_group is None:
+            return y
+        import torch.distributed._functional_collectives as funcol
+
+        out: torch.Tensor = funcol.all_reduce(y, "sum", self.tp_group)
+        return out
 
     @property
     def _red(self) -> Callable[[torch.Tensor], torch.Tensor] | None:
         """`_reduce` for the fused layers, which skip it when None."""
-        return None
+        return self._reduce if self.tp_group is not None else None
+
+    def _token_chunks(self, T: int) -> list[tuple[int, int]]:
+        n = self.tp_chunks if self.tp_group is not None else 1
+        step = T // n
+        return [(j * step, (j + 1) * step if j < n - 1 else T) for j in range(n)]
 
     def prep(self, i: int, prefix: str = "") -> dict[str, torch.Tensor]:
         """Layer i's weights in the fused kernels' layouts: `prefix` "attn_" for an attention
@@ -521,6 +599,8 @@ class NeuronDeciderModel(nn.Module):
                     if lt == "linear_attention"
                     else self.attn_layer(i, x, cos, sin)
                 )
+            elif lt == "linear_attention" and len(self._token_chunks(x.shape[1])) > 1:
+                x = self._gdn_layer_fast_chunked(i, x)
             elif lt == "linear_attention":
                 x = self._fo.gdn_layer_fast(x, self.prep(i), self.gdn_impl, c.eps, reduce=self._red)
             else:
@@ -535,8 +615,33 @@ class NeuronDeciderModel(nn.Module):
                     c.eps,
                     reduce=self._red,
                 )
-            x = self._mlp(i, x)
+            chunks = self._token_chunks(x.shape[1])
+            if self.fast and len(chunks) > 1:
+                x = torch.cat([self._mlp(i, x[:, a:b]) for a, b in chunks], 1)
+            else:
+                x = self._mlp(i, x)
         return rms_norm(x, self.w("final_norm"), c.eps)
+
+    def _gdn_layer_fast_chunked(self, i: int, x: torch.Tensor) -> torch.Tensor:
+        """gdn_layer_fast with its out-projection and all-reduce split into token chunks."""
+        fo, prep, eps = self._fo, self.prep(i), self.cfg.eps
+        proj_fm, zba = fo.gdn_in_proj(x, prep["ln1"], prep, eps)
+        q, k, v, g, beta = fo.gdn_prologue(proj_fm, prep["conv_diag"], zba, prep["gdn_ab"])
+        o = self.gdn_impl(q, k, v, g, beta).to(x.dtype)
+        parts = [
+            x[:, a:b]
+            + self._reduce(
+                fo.gdn_out_proj(
+                    o[:, :, a:b].contiguous(),
+                    zba[:, a:b].contiguous(),
+                    prep["gnorm"],
+                    prep["w_out_t"],
+                    eps,
+                )
+            )
+            for a, b in self._token_chunks(x.shape[1])
+        ]
+        return torch.cat(parts, 1)
 
     def readout(
         self,

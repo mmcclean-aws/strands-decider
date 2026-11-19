@@ -349,6 +349,7 @@ src/strands_decider/              -- published package (inference only)
                   ahead-of-time compilation on AWS Trainium
   neuron_engine.py serving on AWS Trainium (--device neuron): compiled shapes; the engine
                   otherwise infer.py's
+  neuron_tp.py    tensor parallel on Trainium (experimental): ranks in lockstep, rank 0 serves
   neuron_kernels/ NKI kernels for neuron_model.py: nkilib's attention, a WY-form Gated DeltaNet
                   chunk rule (gdn_fast.py), the fused layer prologue and epilogue
                   (fused_ops.py), and their weight layouts (layouts.py)

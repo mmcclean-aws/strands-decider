@@ -33,7 +33,7 @@ import torch
 
 from .infer import EngineConfig, SystemOneEngine
 from .modeling import StrandsDeciderConfig, StrandsDeciderModel, refuse_token_readout
-from .neuron_model import NeuronDeciderModel, from_decider_model
+from .neuron_model import NeuronDeciderModel, from_decider_model, shard
 from .prompting import RenderedQuestion
 from .schema import SystemOneRequest, SystemOneResponse
 
@@ -89,6 +89,9 @@ class NeuronConfig:
     # The fast Gated DeltaNet kernel's matmul operands: bfloat16, or float16 at the same speed
     # with about 8x less rounding error in that kernel.
     gdn_dtype: str = "bfloat16"
+    # Tensor parallel only (neuron_tp.py): token chunks per layer tail, so that one chunk's
+    # all-reduce overlaps the next chunk's compute: 4 took TP2 at 4,096 tokens from 93.2 to 87.9 ms.
+    tp_chunks: int = 4
 
     def __post_init__(self) -> None:
         for name in ("buckets", "prefix_buckets"):
@@ -279,7 +282,11 @@ class NeuronEngine(SystemOneEngine):
         if request.images:
             raise ValueError("device 'neuron' has no vision tower")
         with self._device_lock:
-            return super().evaluate(request)
+            return self._evaluate(request)
+
+    def _evaluate(self, request: SystemOneRequest) -> SystemOneResponse:
+        """`SystemOneEngine.evaluate`, under the device lock."""
+        return super().evaluate(request)
 
     # ---- padding
 
@@ -419,15 +426,32 @@ def load_neuron_engine(
 ) -> NeuronEngine:
     """The neuron counterpart of `infer.load_engine`: a local checkpoint directory or a Hub id,
     on the first visible NeuronCore (NEURON_RT_VISIBLE_CORES)."""
+    neuron_config = neuron_config or NeuronConfig()
+    runtime, decider_config, tokenizer = build_runtime(checkpoint, neuron_config)
+    engine_config = replace(config or EngineConfig(), device="neuron")
+    return NeuronEngine(runtime, decider_config, tokenizer, engine_config, neuron_config)
+
+
+def build_runtime(
+    checkpoint: str,
+    neuron_config: NeuronConfig,
+    *,
+    rank: int = 0,
+    world: int = 1,
+    group: Any = None,
+) -> tuple[NeuronRuntime, StrandsDeciderConfig, Any]:
+    """The compiled model for `checkpoint` on the first visible NeuronCore, with the checkpoint's
+    config and tokenizer. With `world` > 1, rank `rank`'s tensor-parallel shard, which
+    all-reduces over `group` (neuron_tp.py)."""
     if not neuron_available():
         raise RuntimeError(INSTALL_HINT)
-    neuron_config = neuron_config or NeuronConfig()
     # The weights load and convert on the CPU, before the Neuron runtime starts.
     decider = StrandsDeciderModel.load(checkpoint)
     refuse_token_readout(decider.config)
-    config_, tokenizer = decider.config, decider.tokenizer
+    decider_config, tokenizer = decider.config, decider.tokenizer
     shape, sd = from_decider_model(decider, dtype=getattr(torch, neuron_config.dtype))
     del decider
+    shape, sd = shard(shape, sd, rank, world)
     configure_environment()
     import libtorch_neuronx_lite  # noqa: F401  (registers the "neuron" device)
 
@@ -444,6 +468,7 @@ def load_neuron_engine(
         attn_impl=mixers.attn,
         fast=fast,
     )
+    if world > 1:
+        model.tp_group, model.tp_chunks = group, neuron_config.tp_chunks
     runtime = NeuronRuntime(model, device, n_shapes=len(neuron_config.shapes()))
-    engine_config = replace(config or EngineConfig(), device="neuron")
-    return NeuronEngine(runtime, config_, tokenizer, engine_config, neuron_config)
+    return runtime, decider_config, tokenizer
