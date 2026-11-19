@@ -100,6 +100,8 @@ git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--mat
 
 [tool.ruff]
 line-length = 100
+# The Neuron how-to's scripts are kept exactly as they ran on the device; the guide quotes them.
+extend-exclude = ["deploy/trainium2/howto/scripts"]
 # Not requires-python's py311: that would add pyupgrade rewrites (UP017) unrelated to the floor.
 target-version = "py310"
 

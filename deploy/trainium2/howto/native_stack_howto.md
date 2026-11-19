@@ -5,7 +5,7 @@ Verified on 2026-11-10 on a trn2.48xlarge host, image
 (torch 2.13.0, libtorch-neuronx-lite 2.13.0.1.0.3112, neuronx-cc 2.28.7631, nki 0.7.0,
 vllm 0.29.0, vllm-neuron 0.29.0.1.2.0, NRT 2.35.30, neuron-explorer 2.33.0), LNC=2.
 No vLLM engine, no NxDI, no torch-xla tracing. Every snippet below comes from a script in
-`howto_scripts/` that ran on the device. Numbers are from the same runs.
+`scripts/` that ran on the device. Numbers are from the same runs.
 
 All numbers are for **one logical NeuronCore at LNC=2** (two physical NeuronCore-v3).
 Peak: **158 TF/s bf16** and **716 GB/s HBM** per logical core. There are 64 logical cores per
@@ -15,7 +15,7 @@ trn2.48xlarge (4 per chip, 24 GiB HBM each).
 
 ## 0. TL;DR: the environment every process needs
 
-`howto_scripts/common_env.sh` (source it before every run):
+`scripts/common_env.sh` (source it before every run):
 
 ```bash
 export VLLM_PLUGINS=none                      # don't load the vLLM platform plugin
@@ -34,19 +34,24 @@ Minimal program (pattern used by every script):
 
 ```python
 import os
-os.environ.setdefault("VLLM_NEURON_BACKEND", "neuron_native")   # before the lite import
+
+os.environ.setdefault("VLLM_NEURON_BACKEND", "neuron_native")  # before the lite import
 import torch
-import libtorch_neuronx_lite                                      # registers PrivateUse1 device "neuron"
+import libtorch_neuronx_lite  # registers PrivateUse1 device "neuron"
 from libtorch_neuronx_lite.compile.native_backend import register
 
-BACKEND = register()            # -> "neuron_native_lite" (idempotent)
-dev = torch.device("neuron", 0) # always neuron:0; the physical core comes from NEURON_RT_VISIBLE_CORES
+BACKEND = register()  # -> "neuron_native_lite" (idempotent)
+dev = torch.device(
+    "neuron", 0
+)  # always neuron:0; the physical core comes from NEURON_RT_VISIBLE_CORES
 
-w = (torch.randn(2048, 6144, dtype=torch.bfloat16) * 0.02).to(dev)   # make/cast on CPU, then .to(dev)
+w = (torch.randn(2048, 6144, dtype=torch.bfloat16) * 0.02).to(
+    dev
+)  # make/cast on CPU, then .to(dev)
 x = torch.randn(2048, 2048, dtype=torch.bfloat16).to(dev)
 f = torch.compile(lambda x, w: x @ w, backend=BACKEND, fullgraph=True, dynamic=False)
-y = f(x, w)          # asynchronous: returns at once
-print(y.cpu())       # .cpu() blocks until the result is ready
+y = f(x, w)  # asynchronous: returns at once
+print(y.cpu())  # .cpu() blocks until the result is ready
 ```
 
 Backend names: `register()` returns **`neuron_native_lite`**, which is the same name vllm-neuron's
@@ -75,16 +80,22 @@ import. Do not use those.
 ```python
 _fence_t = torch.zeros(1, device=dev)
 _fence_fn = torch.compile(lambda t: t + 1, backend=BACKEND, fullgraph=True, dynamic=False)
+
+
 def neuron_fence():
     _fence_fn(_fence_t).cpu()
-neuron_fence()                      # compile it once, outside any timed region
+
+
+neuron_fence()  # compile it once, outside any timed region
+
 
 def bench(fn, args, iters=96, chunk=8):
-    for _ in range(3): y = fn(*args)
-    y.cpu()                          # warm-up (first call = trace + compile or cache load)
+    for _ in range(3):
+        y = fn(*args)
+    y.cpu()  # warm-up (first call = trace + compile or cache load)
     t0 = time.perf_counter()
     for _ in range(iters // chunk):
-        for _ in range(chunk):       # keep <= NEURON_RT_XU_COMPUTE_MAX_QUEUED_REQUESTS in flight
+        for _ in range(chunk):  # keep <= NEURON_RT_XU_COMPUTE_MAX_QUEUED_REQUESTS in flight
             y = fn(*args)
         neuron_fence()
     return (time.perf_counter() - t0) / iters
@@ -122,23 +133,51 @@ from libtorch_neuronx_lite.nki.nki_hop import wrap_nki
 from nkilib.core.attention.attention_cte import attention_cte
 from nkilib.experimental.gdn import gdn_cte, gdn_conv1d_prefill, build_mask_pack
 
-attn_k = wrap_nki(nki.jit()(attention_cte))   # works on @nki.jit kernels too: wrap_nki(gdn_cte)
-cte_k  = wrap_nki(gdn_cte)
+attn_k = wrap_nki(nki.jit()(attention_cte))  # works on @nki.jit kernels too: wrap_nki(gdn_cte)
+cte_k = wrap_nki(gdn_cte)
 conv_k = wrap_nki(gdn_conv1d_prefill)
 
-def attn_nki(q, k, v):        # q [Hq,S,D] k [Hkv,S,D] v [Hkv,S,D]; GQA is native (Hq % Hkv == 0)
-    return attn_k[2](q=q * q.shape[-1] ** -0.5, k=k, v=v, scale=1.0, causal_mask=True,
-                     tp_q=True, tp_k=True, tp_out=False)            # -> [Hq,S,D]
 
-mask_pack = torch.from_numpy(build_mask_pack()).to(dev)              # host-built constant, upload once
-def gdn(q, k, v, g, b, mp):   # q,k [B,Hk,S,Dk] L2-normalised bf16; v [B,Hv,S,Dv]; g,b [B,Hv,S] fp32
-    return cte_k(query=q, key=k, value=v, g_log=g, beta=b, scale=128 ** -0.5, mask_pack=mp)  # (out, state)
+def attn_nki(q, k, v):  # q [Hq,S,D] k [Hkv,S,D] v [Hkv,S,D]; GQA is native (Hq % Hkv == 0)
+    return attn_k[2](
+        q=q * q.shape[-1] ** -0.5,
+        k=k,
+        v=v,
+        scale=1.0,
+        causal_mask=True,
+        tp_q=True,
+        tp_k=True,
+        tp_out=False,
+    )  # -> [Hq,S,D]
 
-def gdn_cont(q, k, v, g, b, mp, state):  # state [B,Hv,Dk,Dv] fp32 is aliased to output 1, updated IN PLACE
-    return cte_k(query=q, key=k, value=v, g_log=g, beta=b, scale=128 ** -0.5, mask_pack=mp,
-                 recurrent_state=state)
 
-conv = lambda m, w: conv_k(mixed=m, conv_weight=w)    # m [B,C,T] raw qkv, w [C,K] -> (silu(conv), last-K state)
+mask_pack = torch.from_numpy(build_mask_pack()).to(dev)  # host-built constant, upload once
+
+
+def gdn(q, k, v, g, b, mp):  # q,k [B,Hk,S,Dk] L2-normalised bf16; v [B,Hv,S,Dv]; g,b [B,Hv,S] fp32
+    return cte_k(
+        query=q, key=k, value=v, g_log=g, beta=b, scale=128**-0.5, mask_pack=mp
+    )  # (out, state)
+
+
+def gdn_cont(
+    q, k, v, g, b, mp, state
+):  # state [B,Hv,Dk,Dv] fp32 is aliased to output 1, updated IN PLACE
+    return cte_k(
+        query=q,
+        key=k,
+        value=v,
+        g_log=g,
+        beta=b,
+        scale=128**-0.5,
+        mask_pack=mp,
+        recurrent_state=state,
+    )
+
+
+conv = lambda m, w: conv_k(
+    mixed=m, conv_weight=w
+)  # m [B,C,T] raw qkv, w [C,K] -> (silu(conv), last-K state)
 
 f = torch.compile(gdn, backend=BACKEND, fullgraph=True, dynamic=False)
 ```
@@ -198,24 +237,29 @@ f = torch.compile(gdn, backend=BACKEND, fullgraph=True, dynamic=False)
 torch/lite**:
 
 ```python
-local_rank = int(os.environ["LOCAL_RANK"]); core_base = int(os.environ.get("CORE_BASE", "0"))
-os.environ["NEURON_RT_VISIBLE_CORES"] = str(core_base + local_rank)   # one core per process
+local_rank = int(os.environ["LOCAL_RANK"])
+core_base = int(os.environ.get("CORE_BASE", "0"))
+os.environ["NEURON_RT_VISIBLE_CORES"] = str(core_base + local_rank)  # one core per process
 os.environ["NEURON_RT_NUM_CORES"] = "1"
-os.environ.setdefault("NEURON_RT_ROOT_COMM_ID", f"127.0.0.1:{61234 + core_base}")  # SAME on all ranks of the group
+os.environ.setdefault(
+    "NEURON_RT_ROOT_COMM_ID", f"127.0.0.1:{61234 + core_base}"
+)  # SAME on all ranks of the group
 os.environ.setdefault("VLLM_NEURON_BACKEND", "neuron_native")
 import torch, torch.distributed as dist
 import torch.distributed._functional_collectives as funcol
 import libtorch_neuronx_lite
 from libtorch_neuronx_lite.compile.native_backend import register
 
-dist.init_process_group("gloo")      # world PG is gloo. There is NO "neuron" PG backend: device collectives
-BACKEND = register()                 # are traced into the NEFF and run by NRT/CCOM at execution time
+dist.init_process_group(
+    "gloo"
+)  # world PG is gloo. There is NO "neuron" PG backend: device collectives
+BACKEND = register()  # are traced into the NEFF and run by NRT/CCOM at execution time
 dev = torch.device("neuron", 0)
 G = dist.group.WORLD
 
-f_ar  = lambda x: funcol.all_reduce(x, "sum", G)                 # string reduce op (picklable for precompile)
-f_ag  = lambda x: funcol.all_gather_tensor(x, 0, G)              # gather_dim 0 or 1 both work
-f_rs  = lambda x: funcol.reduce_scatter_tensor(x, "sum", 0, G)
+f_ar = lambda x: funcol.all_reduce(x, "sum", G)  # string reduce op (picklable for precompile)
+f_ag = lambda x: funcol.all_gather_tensor(x, 0, G)  # gather_dim 0 or 1 both work
+f_rs = lambda x: funcol.reduce_scatter_tensor(x, "sum", 0, G)
 f_a2a = lambda x: funcol.all_to_all_single(x, None, None, G)
 y = torch.compile(f_ar, backend=BACKEND, fullgraph=True, dynamic=False)(x.to(dev))
 ```
@@ -243,12 +287,16 @@ CORE_BASE=4 torchrun --nproc_per_node=4 --master_port=29605 03_tp_collectives.py
 
 ```python
 from libtorch_neuronx_lite.parallel.replica_mesh import active_mesh
+
 mesh = [[0, 1], [2, 3]]
 with active_mesh(mesh):
     for ranks in mesh:
         g = dist.new_group(ranks)
-        if rank in ranks: my_group = g
-y = torch.compile(lambda t: funcol.all_reduce(t, "sum", my_group), backend=BACKEND, fullgraph=True)(x)
+        if rank in ranks:
+            my_group = g
+y = torch.compile(lambda t: funcol.all_reduce(t, "sum", my_group), backend=BACKEND, fullgraph=True)(
+    x
+)
 ```
 
 * vllm-neuron's own launcher is `vllm_neuron.utils.executor.MPExecutor(world_size, model_load)`. It forks
@@ -345,10 +393,18 @@ attention_cte, MLP), random weights, one graph per bucket, 1 core:
 **(a) Find the NEFF a compiled callable runs** using lite's execution hook:
 
 ```python
-from libtorch_neuronx_lite.compile.execute_context import ExecuteContext, set_execute_context, clear_execute_context
+from libtorch_neuronx_lite.compile.execute_context import (
+    ExecuteContext,
+    set_execute_context,
+    clear_execute_context,
+)
+
 seen = {}
-set_execute_context(ExecuteContext(pre_execute_hook=lambda inputs, md: seen.setdefault(md.neff_id, md.artifact_dir)))
-compiled_fn(*args); clear_execute_context()
+set_execute_context(
+    ExecuteContext(pre_execute_hook=lambda inputs, md: seen.setdefault(md.neff_id, md.artifact_dir))
+)
+compiled_fn(*args)
+clear_execute_context()
 neff = glob.glob(os.path.join(next(iter(seen.values())), "*.neff"))[0]
 ```
 
@@ -453,7 +509,7 @@ The fp32 elementwise work and layout transposes are the first optimization targe
 * The NKI MLP/QKV kernels at TP>=2 were only gate-checked, not run.
 * Multi-node and EFA were not tested. TP across 2 chips (world 8) was tested.
 
-## Script index (`howto_scripts/`, run on the trn2 host from `~/howto/scripts/`)
+## Script index (`scripts/`, run on the trn2 host)
 
 | script | question |
 |---|---|

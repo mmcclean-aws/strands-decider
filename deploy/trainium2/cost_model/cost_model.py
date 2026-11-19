@@ -2,7 +2,7 @@
 
 Every request is ONE prefill forward (no decode). The model estimates per-forward latency,
 instance throughput and MFU for each sharding strategy over a group of P logical cores
-(LNC=2), using measured collective latencies (collectives/trn2_lnc2_collectives.json,
+(LNC=2), using measured collective latencies (trn2_lnc2_collectives.json, next to this file,
 nightly nccom-test data) and per-kernel efficiency factors that are calibrated on device
 (CALIB below; update them from measurements).
 
@@ -26,13 +26,15 @@ Strategies (P = ranks in one model replica; the instance holds 64/P replicas):
 
 from __future__ import annotations
 
+import itertools
 import json
 import math
 import os
 from dataclasses import dataclass, field
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-COLL = json.load(open(os.path.join(HERE, "..", "collectives", "trn2_lnc2_collectives.json")))
+with open(os.path.join(HERE, "trn2_lnc2_collectives.json"), encoding="utf-8") as _fh:
+    COLL = json.load(_fh)
 
 
 # ---------------------------------------------------------------- model
@@ -42,7 +44,7 @@ class Model:
     n_layers: int = 24
     n_gdn: int = 18
     n_attn: int = 6
-    I: int = 6144  # SwiGLU intermediate
+    I: int = 6144  # SwiGLU intermediate  # noqa: E741
     # GDN
     gdn_hk: int = 16
     gdn_hv: int = 16
@@ -78,8 +80,9 @@ class Model:
 
     @property
     def nonembed_params(self) -> int:
-        return (self.n_gdn * (self.gdn_proj_params + self.mlp_params)
-                + self.n_attn * (self.attn_proj_params + self.mlp_params))
+        return self.n_gdn * (self.gdn_proj_params + self.mlp_params) + self.n_attn * (
+            self.attn_proj_params + self.mlp_params
+        )
 
     def gdn_core_flops_per_token(self, chunk: int = 128) -> float:
         # per head: K K^T, Q K^T, A^-1 (beta V), A^-1 (beta K decayed), intra attn @ v_new
@@ -121,8 +124,17 @@ class Calib:
     """Kernel efficiency factors. Defaults are priors; replace with on-device measurements."""
 
     # GEMM efficiency vs tokens per rank (fraction of bf16 peak), piecewise-linear in log2(T)
-    gemm_eff: dict[int, float] = field(default_factory=lambda: {
-        64: 0.30, 128: 0.45, 256: 0.60, 512: 0.72, 1024: 0.80, 2048: 0.84, 4096: 0.86})
+    gemm_eff: dict[int, float] = field(
+        default_factory=lambda: {
+            64: 0.30,
+            128: 0.45,
+            256: 0.60,
+            512: 0.72,
+            1024: 0.80,
+            2048: 0.84,
+            4096: 0.86,
+        }
+    )
     attn_eff: float = 0.45  # head_dim 256 flash attention, fraction of peak
     # GDN chunked kernel (nkilib gdn_cte, schur): fixed + per (head x token) on ONE physical NC
     # From nkilib README trn2 bf16: (1,2,4,768) 192.7us, (1,1,1,8192) 441.9us, (1,1,1,128) 33.7us
@@ -135,35 +147,58 @@ class Calib:
     per_layer_overhead_us: float = 8.0  # kernel launch / sync / DMA setup per layer
     collective_scale: float = 1.0  # in-graph collective cost relative to nccom-test numbers
     overlap: float = 0.0  # fraction of collective time hidden behind compute
-    elem_replicated_frac: float = 0.2  # share of elementwise work that TP cannot shard (norms, residual)
+    elem_replicated_frac: float = (
+        0.2  # share of elementwise work that TP cannot shard (norms, residual)
+    )
 
 
 # On-device measurements (SDK 2.33 native backend, one LNC2 core, final v3 kernels: fused ops + gdn_fast):
 # full forward ms by (T, B). Used to fit the two free parameters of measured_calib().
-MEASURED_DP = {(512, 1): 20.72, (2048, 1): 67.28, (512, 4): 67.12, (4096, 1): 133.58,
-               (1024, 1): 35.20, (2560, 1): 85.65, (256, 8): 68.28}
+MEASURED_DP = {
+    (512, 1): 20.72,
+    (2048, 1): 67.28,
+    (512, 4): 67.12,
+    (4096, 1): 133.58,
+    (1024, 1): 35.20,
+    (2560, 1): 85.65,
+    (256, 8): 68.28,
+}
 # Measured TP (v3, intra-chip adjacent cores, 4-way chunked all-reduce where noted) for validation.
-MEASURED_TP = {("TP", 2, 2048): 47.8, ("TP", 2, 4096): 87.9, ("TP", 4, 2048): 27.3, ("TP", 4, 4096): 56.9}
+MEASURED_TP = {
+    ("TP", 2, 2048): 47.8,
+    ("TP", 2, 4096): 87.9,
+    ("TP", 4, 2048): 27.3,
+    ("TP", 4, 4096): 56.9,
+}
 # In-graph all-reduce vs nccom-test (4r intra-chip proxy): 402 us vs 129 us at 16 MiB -> x3.1.
 IN_GRAPH_COLLECTIVE_SCALE = 3.1
 
 
-def measured_calib(fit: bool = True) -> "Calib":
+def measured_calib(fit: bool = True) -> Calib:
     """GEMM efficiency from the per-GEMM sweep (pre-transposed weights: 82-89% at T>=2048), the GDN
     core from gdn_fast timings (B=1, 16 heads, LNC2: 0.18/0.31/0.55/1.07 ms at T=512/1024/2048/4096 ->
     53 us fixed + 15.5 ns per head-token per LNC2 core), in-graph collectives at x3.1 the nccom numbers,
     and elementwise/per-layer overheads fitted to MEASURED_DP by least squares on a small grid."""
-    c = Calib(gemm_eff={64: 0.12, 128: 0.25, 256: 0.45, 512: 0.65, 1024: 0.78, 2048: 0.86, 4096: 0.88},
-              attn_eff=0.40, gdn_fixed_us=106.0, gdn_ns_per_head_token_nc=31.0, gdn_lnc_speedup=2.0,
-              elementwise_bytes_per_token_layer=40e3, per_layer_overhead_us=20.0,
-              collective_scale=IN_GRAPH_COLLECTIVE_SCALE)
+    c = Calib(
+        gemm_eff={64: 0.12, 128: 0.25, 256: 0.45, 512: 0.65, 1024: 0.78, 2048: 0.86, 4096: 0.88},
+        attn_eff=0.40,
+        gdn_fixed_us=106.0,
+        gdn_ns_per_head_token_nc=31.0,
+        gdn_lnc_speedup=2.0,
+        elementwise_bytes_per_token_layer=40e3,
+        per_layer_overhead_us=20.0,
+        collective_scale=IN_GRAPH_COLLECTIVE_SCALE,
+    )
     if not fit:
         return c
     best = None
     for eb in [x * 5e3 for x in range(0, 121)]:
         for ov in [x * 5.0 for x in range(0, 41)]:
             c.elementwise_bytes_per_token_layer, c.per_layer_overhead_us = eb, ov
-            err = sum((math.log(estimate("DP", 1, T, B, cal=c).latency_ms / v)) ** 2 for (T, B), v in MEASURED_DP.items())
+            err = sum(
+                (math.log(estimate("DP", 1, T, B, cal=c).latency_ms / v)) ** 2
+                for (T, B), v in MEASURED_DP.items()
+            )
             if best is None or err < best[0]:
                 best = (err, eb, ov)
     c.elementwise_bytes_per_token_layer, c.per_layer_overhead_us = best[1], best[2]
@@ -176,7 +211,7 @@ def interp_eff(table: dict[int, float], T: float) -> float:
         return table[ks[0]] * T / ks[0]
     if T >= ks[-1]:
         return table[ks[-1]]
-    for a, b in zip(ks, ks[1:]):
+    for a, b in itertools.pairwise(ks):
         if a <= T <= b:
             w = (math.log2(T) - math.log2(a)) / (math.log2(b) - math.log2(a))
             return table[a] + w * (table[b] - table[a])
@@ -239,8 +274,15 @@ def gdn_core_ms(heads: float, tokens: float, B: int, cal: Calib) -> float:
     return per_nc / cal.gdn_lnc_speedup * 1e-3
 
 
-def estimate(strategy: str, P: int, T: int, B: int = 1, m: Model | None = None,
-             hw: HW | None = None, cal: Calib | None = None) -> Result:
+def estimate(
+    strategy: str,
+    P: int,
+    T: int,
+    B: int = 1,
+    m: Model | None = None,
+    hw: HW | None = None,
+    cal: Calib | None = None,
+) -> Result:
     m, hw, cal = m or Model(), hw or HW(), cal or Calib()
     Hb = m.dtype_bytes
     note = ""
@@ -250,10 +292,27 @@ def estimate(strategy: str, P: int, T: int, B: int = 1, m: Model | None = None,
 
     def layer_common(tok_loc: float, w_shard: float) -> tuple[float, float, float, float]:
         """GEMM + elementwise time for one GDN layer and one attention layer (ms)."""
-        gdn_p = gemm_ms(2 * m.gdn_proj_params * tok_loc / w_shard, m.gdn_proj_params * Hb / w_shard, tok_loc, hw, cal)
-        att_p = gemm_ms(2 * m.attn_proj_params * tok_loc / w_shard, m.attn_proj_params * Hb / w_shard, tok_loc, hw, cal)
-        mlp = gemm_ms(2 * m.mlp_params * tok_loc / w_shard, m.mlp_params * Hb / w_shard, tok_loc, hw, cal)
-        elem = cal.elementwise_bytes_per_token_layer * tok_loc / hw.hbm_bw_core * 1e3 + cal.per_layer_overhead_us * 1e-3
+        gdn_p = gemm_ms(
+            2 * m.gdn_proj_params * tok_loc / w_shard,
+            m.gdn_proj_params * Hb / w_shard,
+            tok_loc,
+            hw,
+            cal,
+        )
+        att_p = gemm_ms(
+            2 * m.attn_proj_params * tok_loc / w_shard,
+            m.attn_proj_params * Hb / w_shard,
+            tok_loc,
+            hw,
+            cal,
+        )
+        mlp = gemm_ms(
+            2 * m.mlp_params * tok_loc / w_shard, m.mlp_params * Hb / w_shard, tok_loc, hw, cal
+        )
+        elem = (
+            cal.elementwise_bytes_per_token_layer * tok_loc / hw.hbm_bw_core * 1e3
+            + cal.per_layer_overhead_us * 1e-3
+        )
         return gdn_p, att_p, mlp, elem
 
     if strategy in ("DP", "PP"):
@@ -261,14 +320,22 @@ def estimate(strategy: str, P: int, T: int, B: int = 1, m: Model | None = None,
         gdn_p, att_p, mlp, elem = layer_common(tok, 1)
         g_core = gdn_core_ms(m.gdn_hv, T, B, cal)
         a_core = m.attn_core_flops(T) * B / (hw.peak_bf16_core * cal.attn_eff) * 1e3
-        bd = {"gdn_proj": gdn_p * m.n_gdn, "attn_proj": att_p * m.n_attn, "mlp": mlp * m.n_layers,
-              "gdn_core": g_core * m.n_gdn, "attn_core": a_core * m.n_attn, "elementwise": elem * m.n_layers}
+        bd = {
+            "gdn_proj": gdn_p * m.n_gdn,
+            "attn_proj": att_p * m.n_attn,
+            "mlp": mlp * m.n_layers,
+            "gdn_core": g_core * m.n_gdn,
+            "attn_core": a_core * m.n_attn,
+            "elementwise": elem * m.n_layers,
+        }
         if strategy == "PP":
             # stage boundary send of [T,H] per stage; latency equals DP plus P-1 hops
             hop = coll_us("allgather", tok * m.H * Hb, 2, cal) * 1e-3
             bd["p2p"] = hop * (P - 1)
             comm = bd["p2p"]
-            note = "pipeline: same single-request latency as DP (+hops); throughput no better than DP"
+            note = (
+                "pipeline: same single-request latency as DP (+hops); throughput no better than DP"
+            )
         P = P_eff if strategy == "DP" else P
     elif strategy in ("TP", "TPSP"):
         # attention: 8 q heads -> P<=8 ; KV (2 heads) replicated when P>2
@@ -276,7 +343,11 @@ def estimate(strategy: str, P: int, T: int, B: int = 1, m: Model | None = None,
         # elementwise work: ~80% is head/feature-sharded under TP (GDN prologue, gated norm, conv,
         # activations, attention elementwise); RMSNorm + residual (~20%) is replicated unless SP
         # (TP+SP also shards the norms/residual over tokens, so all of it divides by P)
-        elem = elem / P if strategy == "TPSP" else elem * (cal.elem_replicated_frac + (1 - cal.elem_replicated_frac) / P)
+        elem = (
+            elem / P
+            if strategy == "TPSP"
+            else elem * (cal.elem_replicated_frac + (1 - cal.elem_replicated_frac) / P)
+        )
         g_core = gdn_core_ms(m.gdn_hv / P, T, B, cal)
         kv_rep = max(1, P / m.nkv)
         a_core = m.attn_core_flops(T) * B / P / (hw.peak_bf16_core * cal.attn_eff) * 1e3
@@ -287,9 +358,15 @@ def estimate(strategy: str, P: int, T: int, B: int = 1, m: Model | None = None,
         else:
             per = 2 * (coll_us("reducescatter", msg, P, cal) + coll_us("allgather", msg, P, cal))
         comm = per * m.n_layers * 1e-3 * (1 - cal.overlap)
-        bd = {"gdn_proj": gdn_p * m.n_gdn, "attn_proj": att_p * m.n_attn, "mlp": mlp * m.n_layers,
-              "gdn_core": g_core * m.n_gdn, "attn_core": a_core * m.n_attn, "elementwise": elem * m.n_layers,
-              "collectives": comm}
+        bd = {
+            "gdn_proj": gdn_p * m.n_gdn,
+            "attn_proj": att_p * m.n_attn,
+            "mlp": mlp * m.n_layers,
+            "gdn_core": g_core * m.n_gdn,
+            "attn_core": a_core * m.n_attn,
+            "elementwise": elem * m.n_layers,
+            "collectives": comm,
+        }
         if P > m.nq:
             note = f"P>{m.nq}: attention heads cannot be split further"
     elif strategy in ("CP", "ULY", "HYB", "TSP"):
@@ -310,11 +387,15 @@ def estimate(strategy: str, P: int, T: int, B: int = 1, m: Model | None = None,
         a2a_in = tok_loc * (2 * m.gdn_hk * m.gdn_dk + m.gdn_hv * m.gdn_dv + 2 * m.gdn_hv) * Hb
         a2a_out = tok_loc * m.gdn_hv * m.gdn_dv * Hb
         g_core_uly = gdn_core_ms(m.gdn_hv / P, T, B, cal)
-        g_comm_uly = (coll_us("alltoall", a2a_in, P, cal) + coll_us("alltoall", a2a_out, P, cal)) * 1e-3
+        g_comm_uly = (
+            coll_us("alltoall", a2a_in, P, cal) + coll_us("alltoall", a2a_out, P, cal)
+        ) * 1e-3
         # Ulysses attention: a2a q(+gate stays local) k v in, out back
         att_in = tok_loc * (m.nq * m.hd + 2 * m.nkv * m.hd) * Hb
         att_out = tok_loc * m.nq * m.hd * Hb
-        a_comm_uly = (coll_us("alltoall", att_in, P, cal) + coll_us("alltoall", att_out, P, cal)) * 1e-3
+        a_comm_uly = (
+            coll_us("alltoall", att_in, P, cal) + coll_us("alltoall", att_out, P, cal)
+        ) * 1e-3
         if strategy == "CP":
             g_core, g_comm, a_comm = g_core_cp + corr, g_fix_cp, ag_kv
         elif strategy == "ULY":
@@ -325,25 +406,43 @@ def estimate(strategy: str, P: int, T: int, B: int = 1, m: Model | None = None,
             g_core, g_comm, a_comm = g_core_uly, g_comm_uly, ag_kv
         else:  # TSP: CP data flow + weights moved every layer (no replication)
             g_core, g_comm, a_comm = g_core_cp + corr, g_fix_cp, ag_kv
-            w_layer = (m.gdn_proj_params * m.n_gdn + m.attn_proj_params * m.n_attn + m.mlp_params * m.n_layers) * Hb
+            w_layer = (
+                m.gdn_proj_params * m.n_gdn
+                + m.attn_proj_params * m.n_attn
+                + m.mlp_params * m.n_layers
+            ) * Hb
             # each rank receives (P-1)/P of every layer's weights; ring at ~AG busbw of the group
             w_bytes = w_layer * (P - 1) / P
-            w_ms = coll_us("allgather", w_bytes / m.n_layers * P / (P - 1), P, cal) * 1e-3 * m.n_layers
+            w_ms = (
+                coll_us("allgather", w_bytes / m.n_layers * P / (P - 1), P, cal) * 1e-3 * m.n_layers
+            )
             # overlap of weight traffic with GEMMs (TSP's premise); cap by compute
             gemm_total = gdn_p * m.n_gdn + att_p * m.n_attn + mlp * m.n_layers
             exposed = max(0.0, w_ms - gemm_total * 0.9)
             bd["weight_stream_exposed"] = exposed
-            note = f"weights streamed {w_bytes/1e9:.2f} GB/forward/rank ({w_ms:.1f} ms raw)"
+            note = f"weights streamed {w_bytes / 1e9:.2f} GB/forward/rank ({w_ms:.1f} ms raw)"
         comm_l = (g_comm * m.n_gdn + a_comm * m.n_attn) * (1 - cal.overlap)
-        bd.update({"gdn_proj": gdn_p * m.n_gdn, "attn_proj": att_p * m.n_attn, "mlp": mlp * m.n_layers,
-                   "gdn_core": g_core * m.n_gdn, "attn_core": a_core_cp * m.n_attn,
-                   "elementwise": elem * m.n_layers, "collectives": comm_l})
+        bd.update(
+            {
+                "gdn_proj": gdn_p * m.n_gdn,
+                "attn_proj": att_p * m.n_attn,
+                "mlp": mlp * m.n_layers,
+                "gdn_core": g_core * m.n_gdn,
+                "attn_core": a_core_cp * m.n_attn,
+                "elementwise": elem * m.n_layers,
+                "collectives": comm_l,
+            }
+        )
         comm = comm_l + bd.get("weight_stream_exposed", 0.0)
     else:
         raise ValueError(strategy)
 
     # pointer head + embedding gather (tiny)
-    bd["embed+head"] = (tok * m.H * Hb / hw.hbm_bw_core + 0.02e-3) * 1e3 / max(1, P if strategy not in ("DP", "PP") else 1)
+    bd["embed+head"] = (
+        (tok * m.H * Hb / hw.hbm_bw_core + 0.02e-3)
+        * 1e3
+        / max(1, P if strategy not in ("DP", "PP") else 1)
+    )
     lat = sum(bd.values())
     compute = lat - comm
     fl = m.flops(T)["total"] * B
@@ -355,14 +454,47 @@ def estimate(strategy: str, P: int, T: int, B: int = 1, m: Model | None = None,
         mfu = fl / (lat * 1e-3 * hw.peak_bf16_core * cores) * P
     thr_req = replicas * B / (lat * 1e-3) * (P if strategy == "PP" else 1)
     feasible = True
-    w_bytes_rank = (m.nonembed_params * Hb) / (P if strategy in ("TP", "TPSP", "TSP") else 1) + m.vocab * m.H * Hb
+    w_bytes_rank = (m.nonembed_params * Hb) / (
+        P if strategy in ("TP", "TPSP", "TSP") else 1
+    ) + m.vocab * m.H * Hb
     if w_bytes_rank > hw.hbm_bytes_core * 0.8:
         feasible = False
-    return Result(strategy, P, T, B, lat, compute, comm, bd, mfu, replicas, thr_req * T, thr_req, feasible, note)
+    return Result(
+        strategy,
+        P,
+        T,
+        B,
+        lat,
+        compute,
+        comm,
+        bd,
+        mfu,
+        replicas,
+        thr_req * T,
+        thr_req,
+        feasible,
+        note,
+    )
 
 
-STRATS = [("DP", 1), ("TP", 2), ("TP", 4), ("TP", 8), ("TPSP", 2), ("TPSP", 4), ("CP", 2), ("CP", 4),
-          ("ULY", 2), ("ULY", 4), ("ULY", 8), ("HYB", 2), ("HYB", 4), ("TSP", 2), ("TSP", 4), ("PP", 2)]
+STRATS = [
+    ("DP", 1),
+    ("TP", 2),
+    ("TP", 4),
+    ("TP", 8),
+    ("TPSP", 2),
+    ("TPSP", 4),
+    ("CP", 2),
+    ("CP", 4),
+    ("ULY", 2),
+    ("ULY", 4),
+    ("ULY", 8),
+    ("HYB", 2),
+    ("HYB", 4),
+    ("TSP", 2),
+    ("TSP", 4),
+    ("PP", 2),
+]
 
 
 def table(Ts=(128, 256, 512, 1024, 2048, 4096), B=1, cal: Calib | None = None) -> list[Result]:
@@ -370,17 +502,34 @@ def table(Ts=(128, 256, 512, 1024, 2048, 4096), B=1, cal: Calib | None = None) -
 
 
 if __name__ == "__main__":
-    import sys
-    B = int(sys.argv[1]) if len(sys.argv) > 1 else 1
-    cal = measured_calib() if "--measured" in sys.argv else None
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Per-strategy latency, MFU and throughput by tokens.")
+    ap.add_argument("--batch", type=int, default=1, help="rows per forward")
+    ap.add_argument("--measured", action="store_true", help="calibrate to the measured trn2 runs")
+    args = ap.parse_args()
+    B = args.batch
+    cal = measured_calib() if args.measured else None
     if cal is not None:
-        print(f"fitted: elementwise {cal.elementwise_bytes_per_token_layer/1e3:.0f} KB/token/layer, overhead {cal.per_layer_overhead_us:.0f} us/layer")
+        print(
+            f"fitted: elementwise {cal.elementwise_bytes_per_token_layer / 1e3:.0f} KB/token/layer, overhead {cal.per_layer_overhead_us:.0f} us/layer"
+        )
         for (T, Bm), v in MEASURED_DP.items():
-            print(f"  DP T={T} B={Bm}: measured {v:.1f} ms, model {estimate('DP', 1, T, Bm, cal=cal).latency_ms:.1f} ms")
+            print(
+                f"  DP T={T} B={Bm}: measured {v:.1f} ms, model {estimate('DP', 1, T, Bm, cal=cal).latency_ms:.1f} ms"
+            )
         for (st, P, T), v in MEASURED_TP.items():
-            print(f"  {st}{P} T={T}: measured {v:.1f} ms, model {estimate(st, P, T, 1, cal=cal).latency_ms:.1f} ms (validation, not fitted)")
+            print(
+                f"  {st}{P} T={T}: measured {v:.1f} ms, model {estimate(st, P, T, 1, cal=cal).latency_ms:.1f} ms (validation, not fitted)"
+            )
     m = Model()
-    print(f"non-embedding params {m.nonembed_params/1e9:.3f} B; FLOP/token @1024 = {m.flops(1024)['total']/1024/1e9:.2f} GF")
-    print(f"{'T':>5} {'strategy':>8} {'P':>2} {'lat_ms':>7} {'comm':>6} {'MFU':>5} {'req/s/inst':>10} note")
+    print(
+        f"non-embedding params {m.nonembed_params / 1e9:.3f} B; FLOP/token @1024 = {m.flops(1024)['total'] / 1024 / 1e9:.2f} GF"
+    )
+    print(
+        f"{'T':>5} {'strategy':>8} {'P':>2} {'lat_ms':>7} {'comm':>6} {'MFU':>5} {'req/s/inst':>10} note"
+    )
     for r in table(B=B, cal=cal):
-        print(f"{r.T:5d} {r.strategy:>8} {r.P:2d} {r.latency_ms:7.2f} {r.comm_ms:6.2f} {r.mfu:5.1%} {r.throughput_req_s:10.0f} {r.note}")
+        print(
+            f"{r.T:5d} {r.strategy:>8} {r.P:2d} {r.latency_ms:7.2f} {r.comm_ms:6.2f} {r.mfu:5.1%} {r.throughput_req_s:10.0f} {r.note}"
+        )
