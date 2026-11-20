@@ -411,8 +411,10 @@ The LoRA adapter is merged into the bf16 weights at load, and the readout runs o
 ([`neuron_model.py`](../src/strands_decider/neuron_model.py)). As on other devices, one question
 forwards the whole prompt and several share the state's caches; a state over 4,096 tokens or a
 question over 128 tokens takes whole prompts. `serve` compiles every shape before it accepts
-requests, and the Neuron SDK caches the compiled graphs on disk
-(`NEURON_LIBTORCH_CACHE_ROOT`), so only the first start is slow.
+requests. The Neuron SDK caches the compiled graphs on disk (`NEURON_LIBTORCH_CACHE_ROOT`): with
+the default 67 shapes, a first start took 42 minutes on a trn2.48xlarge and a start with the
+cache warm 16 minutes, most of it torch tracing each shape again. `--no-warmup` starts at once
+and compiles each shape on the first request that needs it.
 
 One server uses one logical core (`NEURON_RT_VISIBLE_CORES`). The engine sets the runtime's
 environment unless it is set already: `VLLM_NEURON_BACKEND=neuron_native`, and a
