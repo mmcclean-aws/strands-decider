@@ -47,14 +47,17 @@ curl -s localhost:8100/health
 `serve` compiles every graph the engine uses before it answers `/health`: whole prompts in
 token buckets of 256 to 4,096 (with several rows per forward for short ones), a shared state in
 the same buckets, and question suffixes of 128 tokens in batches of 2 to 8 (`neuron_engine.NeuronConfig`).
-The first start compiles for a long time; later starts load the graphs from
-`NEURON_LIBTORCH_CACHE_ROOT` in seconds. Allow for it in any health-check timeout.
+With the default 67 shapes, a first start took 42 minutes; a start with the compiled graphs in
+`NEURON_LIBTORCH_CACHE_ROOT` took 16, most of it torch tracing each shape again. Allow for it in
+any health-check timeout. `--no-warmup` serves at once and compiles each shape on the first
+request that needs it.
 
 ## A server per core
 
 [`scripts/serve_replicas.sh`](scripts/serve_replicas.sh) starts one server per logical core,
-on consecutive loopback ports. The first one compiles; the rest start once it is healthy and
-load its graphs from the shared cache:
+on consecutive loopback ports. The first one compiles; the rest start together once it is
+healthy and load its graphs from the shared cache (four replicas: 45 minutes for the first, 17
+more for the others):
 
 ```bash
 deploy/trainium2/scripts/serve_replicas.sh StrandsAgents/strands-decider-2B-qwen3.5-v1-2610 64 0 8100

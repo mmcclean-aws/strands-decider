@@ -39,6 +39,17 @@
       }
     },
     {
+      "id": "trainium2",
+      "source": "docs/trainium2.md",
+      "slug": "trainium2",
+      "title": "AWS Trainium2",
+      "description": "How --device neuron runs the 2B model on Trainium2: compiled shapes, NKI kernels, shared prefix, tensor parallel, and measurements.",
+      "nav": {
+        "group": "Using Decider",
+        "order": 3
+      }
+    },
+    {
       "id": "architecture",
       "source": "docs/architecture.md",
       "slug": "architecture",

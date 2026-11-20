@@ -444,7 +444,8 @@ tests/            pytest only: test_core (no GPU), test_server (stubbed), test_g
                   test_ddp (`-m distributed` for the multi-GPU runs);
                   test_core_prompt, test_core_readout, test_core_config, test_core_images
                   (the torch-free core)
-docs/             architecture.md -- this document; inference.md -- serving a checkpoint:
+docs/             architecture.md -- this document; trainium2.md -- the Trainium2 backend's design;
+                  inference.md -- serving a checkpoint:
                   install, ask, serve, the HTTP API, a Mac
 .github/          workflows/tests.yml -- the CPU tests; workflows/generators-live-test.yml
                   and .github/scripts/check_generator_rows.py -- one live batch per generator backend
