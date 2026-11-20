@@ -620,13 +620,18 @@ class NeuronDeciderModel(nn.Module):
         caches: list[torch.Tensor] = []
         for i, lt in enumerate(c.layer_types):
             if lt == "linear_attention":
-                x, state, tail = self.gdn_layer_prefix(i, x, valid, s_len)
+                if self.fast:
+                    x, state, tail = self._fo.gdn_layer_prefix_fast(
+                        x, self.prep(i), self.gdn_impl, valid, s_len, c.eps, reduce=self._red
+                    )
+                else:
+                    x, state, tail = self.gdn_layer_prefix(i, x, valid, s_len)
                 caches += [state, tail]
             else:
                 q, gate, k, v = self._attn_qkv(i, x, cos, sin)
                 x = self._attn_out(i, x, self.attn_impl(q, k, v, c.hd**-0.5), gate)
                 caches += [k, v]
-            x = self.mlp(i, x)
+            x = self._mlp(i, x)
         return tuple(caches)
 
     def suffix_forward(
@@ -649,13 +654,17 @@ class NeuronDeciderModel(nn.Module):
         )
         for i, lt in enumerate(c.layer_types):
             a, b = caches[2 * i], caches[2 * i + 1]
-            if lt == "linear_attention":
+            if lt == "linear_attention" and self.fast:
+                x = self._fo.gdn_layer_suffix_fast(
+                    x, self.prep(i), self.gdn_impl, a, b, c.eps, reduce=self._red
+                )
+            elif lt == "linear_attention":
                 x = self.gdn_layer_suffix(i, x, a, b)
             else:
                 q, gate, k, v = self._attn_qkv(i, x, cos, sin)
                 kp, vp = (t.expand(B, -1, -1, -1).contiguous() for t in (a, b))
                 o = self.attn_impl(q, k, v, c.hd**-0.5, k_prior=kp, v_prior=vp, prior_len=s_len)
                 x = self._attn_out(i, x, o, gate)
-            x = self.mlp(i, x)
+            x = self._mlp(i, x)
         hidden = rms_norm(x, self.w("final_norm"), c.eps)
         return self.readout(hidden, ans_idx, opt_idx, n_slots, inv_temp)

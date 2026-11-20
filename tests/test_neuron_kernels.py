@@ -156,3 +156,59 @@ def test_every_fused_function_the_model_calls_is_in_fused_ops():
     }
     used = set(re.findall(r"\b_?fo\.(\w+)", inspect.getsource(neuron_model)))
     assert used and used <= names, sorted(used - names)
+
+
+class _Recorder:
+    """Stands in for fused_ops: records each fused call and returns its input unchanged."""
+
+    def __init__(self, shape):
+        self.calls, self.shape = [], shape
+
+    def _record(self, name, x):
+        self.calls.append(name)
+        return x
+
+    def gdn_layer_fast(self, x, *a, **k):
+        return self._record("gdn", x)
+
+    def attn_layer_fast(self, x, *a, **k):
+        return self._record("attn", x)
+
+    def mlp_fast(self, x, *a, **k):
+        return self._record("mlp", x)
+
+    def gdn_layer_prefix_fast(self, x, *a, **k):
+        c = self.shape
+        state = torch.zeros(1, c.gh, c.gd, c.gd)
+        return self._record("gdn_prefix", x), state, torch.zeros(1, 3 * c.gh, c.conv_k - 1, c.gd)
+
+    def gdn_layer_suffix_fast(self, x, *a, **k):
+        return self._record("gdn_suffix", x)
+
+
+def test_every_forward_runs_the_fused_layers_when_fast(model_and_sd):
+    """The fast flag must reach the whole-prompt, prefix and suffix forwards alike: a forward
+    that skips it still answers correctly, just at half the speed."""
+    model, _ = model_and_sd
+    c = model.cfg
+    rec = _Recorder(c)
+    model.fast, model._fo = True, rec
+    model._fast_keys = {i: [] for i in range(len(c.layer_types))}
+    n_gdn = c.layer_types.count("linear_attention")
+    n_attn, n = len(c.layer_types) - n_gdn, len(c.layer_types)
+    try:
+        ids = torch.randint(3, 50, (2, 16))
+        with torch.inference_mode():
+            model.torso(ids)
+            assert sorted(rec.calls) == sorted(["gdn"] * n_gdn + ["attn"] * n_attn + ["mlp"] * n)
+            rec.calls.clear()
+            caches = model.prefix_forward(ids[:1], torch.tensor([10]))
+            assert rec.calls.count("gdn_prefix") == n_gdn and rec.calls.count("mlp") == n
+            rec.calls.clear()
+            zeros = torch.zeros(2, dtype=torch.long)
+            model.suffix_forward(
+                ids, torch.tensor([10]), caches, zeros, zeros[:, None], zeros + 1, torch.ones(2)
+            )
+            assert rec.calls.count("gdn_suffix") == n_gdn and rec.calls.count("mlp") == n
+    finally:
+        model.fast = False
