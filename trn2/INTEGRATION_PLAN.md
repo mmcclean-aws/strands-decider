@@ -1,6 +1,6 @@
 # Plan: Trainium2 (`--device neuron`) into strands-decider
 
-Status: plan only. Nothing has been moved yet. This file lives in the `trn2/` staging area of the
+Status (2026-11-20): steps 1-7 done and verified, step 8 in this branch; see Outcome at the end. The upstream issue (step 0) is drafted in ISSUE_DRAFT.md and not posted. This file lives in the `trn2/` staging area of the
 fork's `trn2-port` branch and is deleted with it at the end (step 8).
 
 ## Decisions
@@ -279,3 +279,39 @@ under `research/data/` or quoted in the PR.
 - More than 32 options (`k_pad`): step 2 decides.
 - Maintainers may not want the mypy relaxation for kernel bodies, the external-index extra or the
   HTML reports. Each has a fallback above.
+
+
+## Outcome (2026-11-20)
+
+Done on stacked local branches off `upstream/main` (7e8380c, which had gained the torch-free
+`core` library and the token readout since the plan; the neuron engine refuses token-readout
+checkpoints like the other v1 engines). Nothing is pushed.
+
+| Step | Branch | Verified |
+|---|---|---|
+| 1 model | `neuron/01-model` | 16 CPU tests; real 2B weights vs StrandsDeciderModel fp32: max dp 2.1e-6 over 54 answers |
+| 2 engine | `neuron/02-engine` | CPU engine tests; trn2: install with the extra, `ask`, device_parity 0/54 changed (0.0139, nkilib path) |
+| 3 accuracy gate, MFU bench | `neuron/03-evaluation` | trn2: gate PASS on 1,019 rows (both kernel paths) |
+| 4 fused kernels | `neuron/04-kernels` | trn2: 14 `-m neuron` tests; 2,048 tokens 68.3 ms, 52.4% MFU; parity 0/54 (0.0113) |
+| 5 tensor parallel (experimental launcher) | `neuron/05-tp` | CPU gloo 2/4 ranks; trn2: TP2/TP4 0/54 changed, 5q on 2,500 tokens 88 / 61 ms |
+| 6 deploy/trainium2 | `neuron/06-deploy` | cost model reproduces its calibration; trn2: 4 replicas on loopback |
+| 7 results and docs | `neuron/07-results` | links and anchors checked; numbers from the trn2 runs |
+
+Deviations from the plan, and why:
+
+- Weights load through `StrandsDeciderModel.load` and a PEFT merge in fp32 instead of the port's
+  safetensors reader; it needed `torch_device="cpu"` in `modeling.load`'s PEFT call (with
+  libtorch_neuronx_lite imported, PEFT staged the adapter on `neuron`).
+- Tensor parallel ships as `python -m strands_decider.neuron_tp serve`, not as a `serve` flag,
+  pending the maintainers' view (the plan's fallback).
+- The how-to scripts are kept verbatim and excluded from ruff: autofix removed their
+  side-effect imports.
+- k_pad stays 32 with a 422 beyond it; a 256 bucket was not measured.
+
+Bugs found on trn2 and fixed: PEFT staging the adapter on `neuron`; `mlp_fast` missing from
+`fused_ops` after the layouts split; the shared-prefix forwards not on the fused path (194 ms
+instead of 84 ms for a 2,560-token prefix); torch's compile cache shared across hosts failing
+with NCC_EVRF059. Each has a CPU regression test where one is possible.
+
+Open: `serve` warm start is 16 minutes with warm caches (67 shapes); the upstream issue is not
+posted; nothing is pushed.
