@@ -1,9 +1,0 @@
-__pycache__/
-*.pyc
-ext/
-goldens/
-hf/
-.venv*/
-logs/
-*.neff
-*.ntff
