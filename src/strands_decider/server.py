@@ -18,8 +18,8 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from . import __version__
-from .infer import EngineConfig, SystemOneEngine, load_mlx
-from .modeling import StrandsDeciderModel
+from .infer import EngineConfig, SystemOneEngine, load_mlx, load_neuron
+from .modeling import StrandsDeciderModel, refuse_token_readout
 from .schema import (
     ChoiceQuestion,
     NoulQuestion,
@@ -41,7 +41,8 @@ def warm_up(engine: SystemOneEngine, max_batch: int, vision: bool = False) -> No
     """Ask every question kind, then every number of questions up to `max_batch`, once.
 
     On CUDA the first forward of a shape compiles kernels (Triton's, on a Qwen3.5 torso), once
-    for each number of questions, whatever the state's length. A request with more than
+    for each number of questions, whatever the state's length. On neuron every forward runs a
+    graph compiled for its padded shape, and the engine's own `warm_up` runs each one first. A request with more than
     `max_batch` questions runs in chunks of at most `max_batch`, so these shapes cover every
     request after this. With `vision`, one image request too: see `_warm_up_image`.
     """
@@ -52,6 +53,10 @@ def warm_up(engine: SystemOneEngine, max_batch: int, vision: bool = False) -> No
         "score": ScoreQuestion(instructions="How warm is it?", criteria=["cold", "warm"]),
     }
     started = time.perf_counter()
+    # An engine of compiled shapes (device neuron) compiles each of them first.
+    compile_shapes = getattr(engine, "warm_up", None)
+    if callable(compile_shapes):
+        compile_shapes()
     for name, question in kinds.items():
         engine.evaluate(SystemOneRequest(state=state, questions={name: question}))
     engine.evaluate(SystemOneRequest(state=state, questions=kinds))
@@ -96,8 +101,8 @@ def create_app(
 ) -> FastAPI:
     if device_map and (vision or not device.startswith("cuda")):
         raise ValueError("--device-map splits the text torso across CUDA GPUs: use it with cuda")
-    if vision and device == "mlx":
-        raise ValueError("--vision runs on torch devices (cuda, mps, cpu), not mlx")
+    if vision and device in ("mlx", "neuron"):
+        raise ValueError(f"--vision runs on torch devices (cuda, mps, cpu), not {device}")
     if max_concurrency is not None and max_concurrency < 1:
         raise ValueError("--max-concurrency must be at least 1")
 
@@ -120,9 +125,12 @@ def create_app(
             return load_vision_engine(checkpoint, config, attn_implementation=attn_implementation)
         if device == "mlx":
             return load_mlx(checkpoint, config)
+        if device == "neuron":
+            return load_neuron(checkpoint, config)
         model = StrandsDeciderModel.load(
             checkpoint, device_map=device_map, attn_implementation=attn_implementation
         )
+        refuse_token_readout(model.config)
         return SystemOneEngine(model, config)
 
     # Tests inject a stub via `build_engine=...` to skip model loading. Construction

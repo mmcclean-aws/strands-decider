@@ -2,7 +2,7 @@
 
 The measurements of v1 (the released model), the Gemma 4 v1 models, v21, v19 and the versions
 before them: the seeds and release checks of v1, the Gemma 4 v1 models and v21, the AWS retrain, the summary by version,
-calibration, and accuracy and latency on a Mac. [README.md](README.md) says how to run them, and
+calibration, and accuracy and latency on a Mac and on AWS Trainium2. [README.md](README.md) says how to run them, and
 [jevbench.md](jevbench.md) has the external benchmark. Paths are relative to the repository
 root unless they are links. A module path such as `infer.py` is relative to `src/strands_decider/`.
 
@@ -574,5 +574,81 @@ python evaluation/bench_local.py StrandsAgents/strands-decider-2B-hobson-v19 --d
   --device mlx --lengths 256,1024 --questions 4,16 --reps 5 --out multi.csv
 python evaluation/device_parity.py StrandsAgents/strands-decider-2B-hobson-v19 \
   --device cpu --device mps --device mlx --out parity.json
+```
+
+## Serving on AWS Trainium2: accuracy and latency
+
+Measured with `StrandsAgents/strands-decider-2B-qwen3.5-v1-2610` on one trn2.48xlarge, in the
+Neuron Deep Learning Container `pytorch-inference-vllm-neuronx:0.29.0.1.2.0-neuronx-py314-sdk2.33.0-ubuntu26.04`
+(Neuron SDK 2.33: torch 2.13, libtorch-neuronx-lite 2.13.0.1.0.3112, neuronx-cc 2.28, nki 0.7.0;
+transformers 5.17, peft 0.22), bf16 on the device, LNC=2. One server uses one of the 64 logical
+cores. The setup is in [Serving on AWS Trainium](../docs/inference.md#serving-on-aws-trainium)
+and the design in [docs/trainium2.md](../docs/trainium2.md). JevBench was not run on Trainium2.
+
+**The answers are the same.** On `evaluation/device_parity.py`'s 54 answers, against the CPU in
+fp32, no chosen answer changes:
+
+| run | max \|Δp\| |
+| --- | --- |
+| one core, fused kernels (`--device neuron`) | 0.0113 |
+| one core, nkilib's kernels only (`NeuronConfig(fast_kernels=False)`) | 0.0139 |
+| tensor parallel over 2 cores (`neuron_tp`) | 0.0097 |
+| tensor parallel over 4 cores | 0.0162 |
+
+**Accuracy is within the bf16 floor.** `evaluation/device_accuracy.py` answers the 1,019 labeled
+eval rows on the CPU in fp32 and on the device, and passes a device when its differences are
+those of bf16 rounding ([the gate](device_accuracy.py)):
+
+| run | mean \|Δp\| | p99 | max | changed answers (reference top-two margin) | accuracy | ECE | NLL |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| CPU fp32 (reference) | | | | | 0.8027 | 0.2068 | 0.4824 |
+| fused kernels | 0.0021 | 0.0128 | 0.0242 | 4 (0.0012 to 0.0136) | 0.8027 | 0.2069 | 0.4823 |
+| nkilib's kernels only | 0.0018 | 0.0107 | 0.0136 | 4 (0.0012 to 0.0222) | 0.8037 | 0.2082 | 0.4824 |
+
+Every changed answer is a near-tie on the CPU. The fused kernels' differences are those the
+Trainium2 port measured before it was integrated: mean 0.0021, p99 0.0128, max 0.024. Per-row data:
+[research/data/trn2_accuracy_rows.csv](../research/data/trn2_accuracy_rows.csv).
+
+**One forward on one core.** `evaluation/bench_neuron.py`, the compiled forward alone, median of
+20 blocking calls including the read-back; MFU from the pipelined time over one logical core's
+bf16 peak (166.75 TFLOP/s):
+
+| tokens x rows | fused kernels | MFU | nkilib only | MFU |
+| --- | --- | --- | --- | --- |
+| 256 x 1 | 14.7 ms | 30.3% | 24.9 ms | 17.7% |
+| 512 x 1 | 20.6 ms | 43.1% | 39.9 ms | 22.1% |
+| 1,024 x 1 | 36.5 ms | 50.3% | 78.7 ms | 22.3% |
+| 2,048 x 1 | 68.3 ms | 52.4% | 153.6 ms | 23.0% |
+| 4,096 x 1 | 134.5 ms | 53.6% | 306.1 ms | 23.5% |
+| 256 x 4 | 35.3 ms | 49.9% | 54.7 ms | 32.0% |
+| 512 x 4 | 68.3 ms | 51.8% | 95.7 ms | 37.0% |
+
+The first call of each shape compiled in 30 to 84 s. Data:
+[research/data/trn2_forward_latency.csv](../research/data/trn2_forward_latency.csv).
+
+**Requests.** `device_parity.py`'s requests, warm, one core through `NeuronEngine.evaluate`, and
+over HTTP from `python -m strands_decider.neuron_tp serve` (the last of four runs):
+
+| request | input tokens | one core | TP2 | TP4 |
+| --- | --- | --- | --- | --- |
+| 5 questions, ~40-token state | 391 | 45.1 ms | 32.5 ms | 26.9 ms |
+| 5 questions, ~370-token state | 723 | 52.5 ms | 40.8 ms | 30.3 ms |
+| 1 question, ~2,500-token state | 2,595 | 98.5 ms | 71.8 ms | 46.6 ms |
+| 5 questions, ~2,500-token state | 2,881 | 121.0 ms | 88.3 ms | 61.4 ms |
+
+Without the shared prefix, the last request takes 477 ms on one core: five 2,816-token forwards.
+Data: [research/data/trn2_request_latency.csv](../research/data/trn2_request_latency.csv).
+
+**Starting.** `serve` compiles its 67 shapes before it answers `/health`: 2,513 s from launch on
+a cold cache, 981 s with the compiled graphs in `NEURON_LIBTORCH_CACHE_ROOT`. Four replicas
+started by `deploy/trainium2/scripts/serve_replicas.sh` gave the same answer.
+
+```bash
+python evaluation/device_parity.py StrandsAgents/strands-decider-2B-qwen3.5-v1-2610 \
+  --device cpu --device neuron --out parity.json
+python evaluation/device_accuracy.py StrandsAgents/strands-decider-2B-qwen3.5-v1-2610 \
+  --device cpu --device neuron --out accuracy.json
+NEURON_RT_VISIBLE_CORES=0 python evaluation/bench_neuron.py \
+  StrandsAgents/strands-decider-2B-qwen3.5-v1-2610 --shapes 256x1,512x1,1024x1,2048x1,4096x1,256x4,512x4
 ```
 

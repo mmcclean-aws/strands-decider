@@ -29,7 +29,7 @@ console = Console()
 
 
 def _auto_device() -> str:
-    """Best available torch device: cuda > mps > cpu. MLX is opt-in (`--device mlx`)."""
+    """Best available torch device: cuda > mps > cpu. MLX and neuron are opt-in (`--device`)."""
     if torch.cuda.is_available():
         return "cuda"
     if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
@@ -38,7 +38,7 @@ def _auto_device() -> str:
 
 
 def _configure_inference_logging(device: str) -> None:
-    if str(device).split(":", 1)[0] in {"cpu", "mps", "mlx"}:
+    if str(device).split(":", 1)[0] in {"cpu", "mps", "mlx", "neuron"}:
         logging.getLogger("transformers.integrations.hub_kernels").setLevel(logging.ERROR)
 
 
@@ -60,8 +60,9 @@ def serve_cmd(
     device: str | None = typer.Option(
         None,
         "--device",
-        help="cuda, mps or cpu (torch), or mlx (Apple silicon, needs the mlx extra). "
-        "Auto-detected when omitted: cuda > mps > cpu; mlx only when asked for.",
+        help="cuda, mps or cpu (torch), mlx (Apple silicon, needs the mlx extra), or neuron "
+        "(AWS Trainium, needs the neuron extra). Auto-detected when omitted: cuda > mps > cpu; "
+        "mlx and neuron only when asked for.",
     ),
     no_prefix_cache: bool = typer.Option(False, "--no-prefix-cache"),
     model_name: str | None = typer.Option(
@@ -141,8 +142,9 @@ def ask_cmd(
     device: str | None = typer.Option(
         None,
         "--device",
-        help="cuda, mps or cpu (torch), or mlx (Apple silicon, needs the mlx extra). "
-        "Auto-detected when omitted: cuda > mps > cpu; mlx only when asked for.",
+        help="cuda, mps or cpu (torch), mlx (Apple silicon, needs the mlx extra), or neuron "
+        "(AWS Trainium, needs the neuron extra). Auto-detected when omitted: cuda > mps > cpu; "
+        "mlx and neuron only when asked for.",
     ),
     as_json: bool = typer.Option(False, "--json", help="Print the raw API response."),
 ) -> None:

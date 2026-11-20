@@ -16,6 +16,12 @@ to a private S3 bucket, builds the image in AWS CodeBuild and creates the endpoi
 removes it. See
 [sagemaker/README.md](sagemaker/README.md).
 
+## AWS Trainium2
+
+`strands-decider serve --device neuron` on a `trn2.48xlarge` EC2 instance: one server per
+logical NeuronCore, up to 64 on the instance, or a tensor-parallel group for long states. See
+[trainium2/README.md](trainium2/README.md).
+
 ## AWS Lambda
 
 Serverless, on arm64 CPUs: no GPU, no instance to reserve, nothing standing between requests.

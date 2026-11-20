@@ -24,6 +24,9 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "numpy>=1.24",
     "safetensors>=0.4",
+    # Imported directly by hidden_engine.py and the torch-free core (strands_decider.core),
+    # not only through transformers.
+    "tokenizers>=0.22",
 ]
 
 [project.optional-dependencies]
@@ -32,8 +35,9 @@ dependencies = [
 # live under training/, not src/, so they ship in the repo, not in the wheel; this extra
 # is here for `pip install -e ".[train]"` from a checkout rather than for Hub consumers.
 train = ["datasets>=2.20"]
-# Image input (`serve --vision`, `ask --image`, docs/vision.md); also needs transformers >= 5.18.
-vision = ["pillow>=10"]
+# Image input: v1's (`serve --vision`, `ask --image`, docs/vision.md), which also needs
+# transformers >= 5.18, and the core's (strands_decider.core), which reads image headers with it.
+vision = ["pillow>=13"]
 # `--device mlx`: the torso on Apple silicon's GPU through mlx-lm
 # (src/strands_decider/mlx_engine.py).
 # mlx-lm is capped at the minor version tested: the backend uses its Qwen3.5 module layout and
@@ -41,6 +45,17 @@ vision = ["pillow>=10"]
 mlx = [
     "mlx>=0.32.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "mlx-lm>=0.32,<0.33; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+# `--device neuron`: AWS Trainium through the Neuron SDK's PyTorch-native backend
+# (src/strands_decider/neuron_engine.py). The packages are on the Neuron repository, not PyPI,
+# which holds 0.0.1 placeholders under these names; the floors make an install without the
+# Neuron index fail instead of installing those:
+#   pip install "strands-decider[neuron]" --extra-index-url https://pip.repos.neuron.amazonaws.com
+# nkilib, which the kernels also need, ships in the Neuron Deep Learning Container image only.
+neuron = [
+    "libtorch-neuronx-lite>=2.13; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nki>=0.7; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "neuronx-cc>=2.28; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 # `--device cuda`: flash-linear-attention's Triton kernels for the Gated DeltaNet layers. The conv
 # layer's kernel, causal-conv1d, compiles against the local CUDA toolkit and is not listed; on a
@@ -52,10 +67,13 @@ mps = []
 cpu = []
 benchmark = ["boto3>=1.34", "matplotlib>=3.8"]
 dev = [
-    "pillow>=10",
+    "pillow>=13",
+    # The chat-template tests (tests/test_core_prompt.py) render Gemma 4's templates.
+    "jinja2>=3.1",
     "pytest>=8.0",
     "ruff>=0.6",
-    "mypy>=1.15,<3",
+    # 2.4 is the first mypy that reads numpy 2.5's stubs for the 3.11 target (tool.mypy).
+    "mypy>=2.4,<3",
     "pre-commit>=3.7",
     "commitizen>=3.28",
 ]
@@ -82,6 +100,8 @@ git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--mat
 
 [tool.ruff]
 line-length = 100
+# The Neuron how-to's scripts are kept exactly as they ran on the device; the guide quotes them.
+extend-exclude = ["deploy/trainium2/howto/scripts"]
 # Not requires-python's py311: that would add pyupgrade rewrites (UP017) unrelated to the floor.
 target-version = "py310"
 
@@ -132,10 +152,24 @@ module = [
     "yaml",
     "mlx.*",
     "mlx_lm.*",
+    "libtorch_neuronx_lite.*",
+    "nki.*",
+    "nkilib.*",
     "PIL.*",
     "tokenizers",
 ]
 ignore_missing_imports = true
+
+# The NKI kernels (--device neuron) are written against nki's tracing API, which has no types;
+# their torch wrappers are typed. The torch-side layouts (neuron_kernels/layouts.py) are not exempt.
+[[tool.mypy.overrides]]
+module = [
+    "strands_decider.neuron_kernels.gdn_fast",
+    "strands_decider.neuron_kernels.fused_ops",
+]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "training/tests"]
@@ -146,6 +180,7 @@ pythonpath = [".", "evaluation", "tests", "training/tests"]
 addopts = "-m 'not distributed'"
 markers = [
     "distributed: launches torchrun worker processes (minutes); run with -m distributed",
+    "neuron: needs AWS Trainium and the Neuron SDK; skips elsewhere",
 ]
 
 [tool.coverage.report]
@@ -172,7 +207,8 @@ format = "ruff format {args:.}"
 detached = true
 dependencies = [
     "ruff>=0.6",
-    "mypy>=1.15,<3",
+    # 2.4 or later: see the dev extra.
+    "mypy>=2.4,<3",
     "pydantic>=2.7",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
