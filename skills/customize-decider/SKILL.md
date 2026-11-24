@@ -58,6 +58,38 @@ the checkout (for example `../decider-work`, called `work/` below) and keep it o
 holds the user's data. Run commands from the checkout root, with `work/` pointing there
 (`ln -s ../decider-work work` is the simplest way).
 
+## Version 1 or version 2
+
+The released models come in two versions. The phases below are the same for both, and the
+examples use a v1 model.
+
+- **v1:** `StrandsAgents/strands-decider-2B-qwen3.5-v1-2610`, and
+  `StrandsAgents/strands-decider-<size>-gemma4-v1-2610` for E2B, E4B, 12B and 26B-A4B.
+- **v2:** `StrandsAgents/strands-decider-<size>-gemma4-v2-2611` for E2B, E4B, 12B, 26B-A4B and
+  31B. `eval`, `calibrate`, `serve` and `init_from` take a v2 model as they take a v1 model.
+
+For a v2 model, these steps change:
+
+- **Rows.** The row format has no images: the measurement and the training read the text of a
+  row. The row check of `references/data-format.md` counts the tokens of the v1 prompt. For a
+  v2 model, `eval` and training drop each row that is longer than the window and print the
+  count.
+- **Phase 3.** `calibrate` writes the fitted temperature into the `decision_config.json` of the
+  local copy. A v2 model has one temperature for all question types.
+- **Phases 4 to 6.** `init_from` trains a new LoRA adapter on the released weights, and the
+  readout trains on from the released one. Use the config of `references/training.md`,
+  "A v2 model".
+- **Phase 7.** Export the three seeds as one model. Then calibrate and score the exported
+  directory, so that you measure the files you ship:
+
+  ```bash
+  python -m training.export_v2 work/ckpt/s0 work/ckpt/s1 work/ckpt/s2 work/release
+  python -m training.evaluate calibrate work/release --data work/eval/eval.jsonl --limit 1000000
+  python -m training.evaluate eval work/release --data work/eval/eval.jsonl --limit 1000000 --out work/results/release.json
+  ```
+
+- **Phase 8.** Serve the exported directory: `strands-decider serve work/release --port 8000`.
+
 ## Phase 0. Is a decider the right tool?
 
 A decider reads a state (text, structured data, or an image for the Qwen3.5 model) and a question,
@@ -75,7 +107,7 @@ LLM or a person.
 
 Poor fits: the answer is free text; the options are not known before the call; the decision needs
 many steps of reasoning that are not in the state; the state is much longer than the serving
-window (4,096 tokens by default; see `docs/inference.md`).
+window (4,096 tokens by default; see `designs/inference.md`).
 
 If it is a poor fit, say so and stop.
 
@@ -251,7 +283,7 @@ gain is inside the noise, say so: the training did not help, and the released mo
 
 ## Phase 8. Ship and watch
 
-- Serve: `strands-decider serve <checkpoint> --port 8000` (`docs/inference.md` for devices,
+- Serve: `strands-decider serve <checkpoint> --port 8000` (`designs/inference.md` for devices,
   batching and the window). Always serve a calibrated checkpoint.
 - Thresholds for `choice` and `score`: from the test-half `by_confidence_band` table and the error
   costs in the task card, choose the confidence at which the application acts without a check. The

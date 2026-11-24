@@ -1,6 +1,6 @@
 # Image evaluation
 
-The measurements behind [docs/vision.md](../../docs/vision.md#how-well-it-does).
+The measurements behind [designs/images.md](../../designs/images.md#how-well-it-does).
 
 | File | What it does |
 | --- | --- |

@@ -20,7 +20,7 @@ import json
 import os
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import torch
 import torch.nn as nn
@@ -30,7 +30,7 @@ from safetensors import safe_open
 from transformers import AutoConfig, AutoModel, AutoTokenizer
 
 from . import expert_lora, prefix_split_attention
-from .core import CODE_TOKEN_IDS, MAX_CODES
+from .core import CODE_TOKEN_IDS, MAX_CODES, DecisionConfig, load_readout
 
 # Large negative rather than -inf: keeps softmax finite under autocast/bf16, where
 # -inf can produce NaNs if an entire row is masked by a malformed batch.
@@ -515,6 +515,12 @@ class StrandsDeciderModel(nn.Module):
             model.attach_lora()
         return model
 
+    def set_readout(self, checkpoint: str) -> None:
+        """Set the token readout to the one of model checkpoint `checkpoint`, a directory
+        (training.export_v2, a released v2 model)."""
+        assert isinstance(self.head, TokenReadoutHead)
+        self.head.proj.weight.data.copy_(torch.tensor(load_readout(checkpoint)))
+
     def attach_expert_lora(self) -> None:
         c = self.config
         alpha = c.lora_alpha if c.expert_lora_alpha is None else c.expert_lora_alpha
@@ -529,6 +535,7 @@ class StrandsDeciderModel(nn.Module):
         kwargs: dict[str, Any] = {
             "dtype": getattr(torch, config.torch_dtype),
             "revision": config.base_revision,
+            "output_loading_info": True,
         }
         if device_map:
             kwargs["device_map"] = device_map
@@ -542,10 +549,14 @@ class StrandsDeciderModel(nn.Module):
             # the input embeddings, which the KL reference reads instead).
             import transformers
 
-            lm = transformers.Qwen3_5ForCausalLM.from_pretrained(
-                config.base_model, config=base_cfg.get_text_config(), **kwargs
+            lm, loading_info = cast(
+                tuple[transformers.Qwen3_5ForCausalLM, dict[str, Any]],
+                transformers.Qwen3_5ForCausalLM.from_pretrained(
+                    config.base_model, config=base_cfg.get_text_config(), **kwargs
+                ),
             )
             torso = lm.model
+            decoder_prefix = "model."
         elif base_cfg.model_type in GEMMA4_CLASSES:
             # Gemma 4 checkpoints are multimodal too, but the Qwen trick does not carry
             # over: Gemma4ForCausalLM does not map the checkpoint's `model.language_model.*`
@@ -556,13 +567,24 @@ class StrandsDeciderModel(nn.Module):
             # `gemma4` with a mixture-of-experts block in every layer.
             import transformers
 
-            full = getattr(transformers, GEMMA4_CLASSES[base_cfg.model_type]).from_pretrained(
-                config.base_model, **kwargs
-            )
+            full, loading_info = getattr(
+                transformers, GEMMA4_CLASSES[base_cfg.model_type]
+            ).from_pretrained(config.base_model, **kwargs)
             torso = full.model.language_model
+            decoder_prefix = "model.language_model."
             del full
         else:
-            torso = AutoModel.from_pretrained(config.base_model, **kwargs)
+            torso, loading_info = AutoModel.from_pretrained(config.base_model, **kwargs)
+            decoder_prefix = ""
+        # The discarded LM head and multimodal encoders are not part of the torso.
+        missing = sorted(
+            key for key in loading_info["missing_keys"] if key.startswith(decoder_prefix)
+        )
+        if missing:
+            raise ValueError(
+                f"{config.base_model}: missing decoder weights ({len(missing)}): "
+                f"{', '.join(missing[:5])}; refusing to use an incompletely loaded torso"
+            )
         if config.host_embeddings:
             table = getattr(torso, "embed_tokens_per_layer", None)
             if table is not None:
@@ -719,8 +741,27 @@ class StrandsDeciderModel(nn.Module):
     ) -> StrandsDeciderModel:
         """Load checkpoint `path` (a local directory or a Hub id) to serve it, or with
         `trainable` to train it on: the adapter trains, and the attention is the one training
-        uses. `host_embeddings`, when given, replaces the checkpoint's setting."""
+        uses. `host_embeddings`, when given, replaces the checkpoint's setting. A model
+        checkpoint (training.export_v2, a released v2 model) loads as its merged weights and
+        its readout, to evaluate."""
+        from .decision import is_model_checkpoint  # here: decision imports this module
+
         path = checkpoint_dir(path)
+        if is_model_checkpoint(path):
+            decision = DecisionConfig.load(path)
+            config = StrandsDeciderConfig(
+                base_model=path,
+                head_type="token_readout",
+                attention_mode=decision.attention_mode,
+                max_length=decision.max_length_validated,
+                temperature=decision.temperature,
+                use_lora=False,
+            )
+            model = cls.from_pretrained_base(
+                config, device_map=device_map, attn_implementation=attn_implementation
+            )
+            model.set_readout(path)
+            return model
         config = StrandsDeciderConfig.from_json(config_path(path))
         config.base_revision = base_revision(path, config)
         if host_embeddings is not None:
